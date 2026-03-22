@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Prediction Form</title>
+    <link
+        rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css"
+    >
+</head>
+<body>
+    <main class="container">
+        <h1>Prediction Form</h1>
+        <form method="post">
+            {% csrf_token %}
+            
+            <!-- Mandatory fields -->
+            <fieldset>
+                <legend>Mandatory Information</legend>
+                <label for="id_identifier">Identifiant</label>
+                {{ form.identifier }}
+
+                <label for="id_age">Âge</label>
+                {{ form.age }}
+
+                <label for="id_sex">Sexe</label>
+                {{ form.sex }}
+
+                <label for="id_education">Scolarité</label>
+                {{ form.education }}
+
+                <label for="id_language">Langue maternelle</label>
+                {{ form.language }}
+
+                <label for="id_fluency_score">Score fluence catégorielle</label>
+                {{ form.fluency_score }}
+            </fieldset>
+
+            <!-- Optional fields -->
+            <fieldset>
+                <legend>Optional Information</legend>
+                <label for="id_handedness">Latéralité manuelle</label>
+                {{ form.handedness }}
+
+                <label for="id_nb_language">Bi/Multi-linguisme</label>
+                {{ form.nb_language }}
+
+                <label for="id_hearing">Audition</label>
+                {{ form.hearing }}
+
+                <label for="id_moca">Score MoCA</label>
+                {{ form.moca }}
+
+                <label for="id_ravlt_imm">Score RAVLT immédiat</label>
+                {{ form.ravlt_imm }}
+
+                <label for="id_ravlt_delay">Score RAVLT différé</label>
+                {{ form.ravlt_delay }}
+
+                <label for="id_logic_imm">Score Mémoire Logique immédiat</label>
+                {{ form.logic_imm }}
+
+                <label for="id_logic_delay">Score Mémoire Logique différé</label>
+                {{ form.logic_delay }}
+            </fieldset>
+
+            <!-- New risk factors fields -->
+            <fieldset>
+                <legend>Additional Risk Factors</legend>
+
+                <label for="id_hist_demence_fam">Historique de démence familiale</label>
+                {{ form.hist_demence_fam }}
+
+                <label for="id_hist_demence_parent">Historique de démence parentale</label>
+                {{ form.hist_demence_parent }}
+
+                <label for="id_living_alone">Vit seul(e)</label>
+                {{ form.living_alone }}
+
+                <label for="id_income">Revenu</label>
+                {{ form.income }}
+
+                <label for="id_retired">Retraité(e)</label>
+                {{ form.retired }}
+
+                <label for="id_stroke">Antécédent d'AVC</label>
+                {{ form.stroke }}
+
+                <label for="id_tbi">Antécédent de traumatisme crânien</label>
+                {{ form.tbi }}
+
+                <label for="id_hta">Hypertension artérielle</label>
+                {{ form.hta }}
+
+                <label for="id_diab_type2">Diabète de type 2</label>
+                {{ form.diab_type2 }}
+
+                <label for="id_obesity">Obésité</label>
+                {{ form.obesity }}
+
+                <label for="id_depression">Dépression</label>
+                {{ form.depression }}
+
+                <label for="id_anxiety">Anxiété</label>
+                {{ form.anxiety }}
+
+                <label for="id_smoking">Tabagisme</label>
+                {{ form.smoking }}
+
+                <label for="id_alcohol">Consommation d'alcool</label>
+                {{ form.alcohol }}
+
+                <label for="id_poly_pharm5">Polypharmacie (≥5 médicaments)</label>
+                {{ form.poly_pharm5 }}
+
+                <label for="id_physical_activity">Activité physique</label>
+                {{ form.physical_activity }}
+
+                <label for="id_social_life">Vie sociale</label>
+                {{ form.social_life }}
+
+                <label for="id_cognitive_activities">Activités cognitives</label>
+                {{ form.cognitive_activities }}
+
+                <label for="id_nutrition_score">Score de nutrition</label>
+                {{ form.nutrition_score }}
+
+                <label for="id_sleep_deprivation">Privation de sommeil</label>
+                {{ form.sleep_deprivation }}
+            </fieldset>
+
+            <button type="submit">Submit</button>
+        </form>
+    </main>
+</body>
+</html>

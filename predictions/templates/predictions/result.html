@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Prediction Results</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+</head>
+<body>
+
+<div class="result-container">
+    <h2>Prediction Results</h2>
+
+    <div class="result-item">
+        <span class="result-comment">{{ result.neurocog_age_flu_weight_comment }}</span>
+    </div>
+
+    <div class="result-item">
+        <span class="result-comment">{{ result.delta_neurocogage_flu_weight_comment }}</span>
+    </div>
+
+    <div class="result-item">
+        <span class="result-comment">{{ result.risk_dementia_comment }}</span>
+    </div>
+
+    <div class="result-item">
+        <span class="result-comment">{{ result.risk_handicap_comment }}</span>
+    </div>
+
+    <!-- Display the interactive scatter plot here -->
+    <h3>Plot: Neurocog Age Flu Weight vs Actual Age</h3>
+    <div id="scatter-plot"></div> <!-- Scatter plot container -->
+
+    <!-- Display the gauges below the scatter plot -->
+    <h3>Gauges for Risk Levels</h3>
+    <div id="gauge-plot"></div> <!-- Gauges plot container -->
+
+    <a class="back-link" href="{% url 'prediction_view' %}">Make Another Prediction</a>
+</div>
+
+<script>
+    var scatterData = {{ scatter_json|safe }};
+    Plotly.react('scatter-plot', scatterData.data, scatterData.layout);
+
+    var gaugeData = {{ gauge_json|safe }};
+    Plotly.react('gauge-plot', gaugeData.data, gaugeData.layout);
+</script>
+
+</body>
+</html>
