@@ -1,29 +1,66 @@
+"""
+views.py - VERSION CORRIGÉE POUR PRODUCTION
+Chemins relatifs + Lazy loading
+"""
+
 import io
-import urllib, base64
+import urllib
+import base64
 import numpy as np
+from pathlib import Path
 from django.shortcuts import render
 from .forms import PredictionForm
-from .utils import predict_with_model_1, predict_with_model_2,predict_with_model_3
+from .utils import predict_with_model_1, predict_with_model_2, predict_with_model_3
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.io as pio
 
-df = pd.read_excel('D:\\Projects\\CogniScreen\\CogniScreen\\Moncef_elise_rg order_2\\Example_database_withoutrois.xlsx')
-df.head()
+# ========== CONFIGURATION DES CHEMINS ==========
+
+BASE_DIR = Path(__file__).resolve().parent
+DATA_PATH = BASE_DIR / "data" / "Example_database_withoutrois.xlsx"
+
+print(f"📂 views.py - DATA_PATH: {DATA_PATH}")
+
+# ========== LAZY LOADING ==========
+
+_DF_CACHE = None
+
+def get_sample_dataframe():
+    """Charge le DataFrame (une seule fois)"""
+    global _DF_CACHE
+    
+    if _DF_CACHE is None:
+        if not DATA_PATH.exists():
+            print(f"⚠️ Fichier non trouvé : {DATA_PATH}")
+            return pd.DataFrame({'neurocog_age_flu_weight': [], 'age': []})
+        
+        try:
+            print(f"📂 Chargement de {DATA_PATH}...")
+            _DF_CACHE = pd.read_excel(DATA_PATH)
+            print(f"✅ {len(_DF_CACHE)} lignes chargées")
+        except Exception as e:
+            print(f"❌ Erreur : {e}")
+            _DF_CACHE = pd.DataFrame({'neurocog_age_flu_weight': [], 'age': []})
+    
+    return _DF_CACHE
+
 
 def home(request):
-    return render(request,'predictions/index.html')
+    return render(request, 'predictions/index.html')
 
 
 def prediction_view(request):
     if request.method == 'POST':
         form = PredictionForm(request.POST)
+        
         if form.is_valid():
-            # Extract cleaned data
             data = form.cleaned_data
-            numeric_data = {key: float(value) if value not in [None, ''] else 0 for key, value in data.items()}
+            numeric_data = {
+                key: float(value) if value not in [None, ''] else 0 
+                for key, value in data.items()
+            }
             
-            # Check if any optional fields are provided
             has_optional_fields = any(
                 numeric_data[field] not in [None, '', 0] for field in [
                     'handedness', 'nb_language', 'hearing', 'moca', 'ravlt_imm', 
@@ -33,10 +70,10 @@ def prediction_view(request):
 
             has_optional_fields_plus_plus = any(
                 numeric_data[field] in [1, 0] for field in [
-                     'hist_demence_fam', 'hist_demence_parent', 'living_alone', 'income', 
-                     'retired','stroke', 'tbi', 'hta', 'diab_type2', 'obesity', 'depression', 'anxiety', 
-                     'smoking', 'alcohol','poly_pharm5', 'physical_activity', 'social_life','cognitive_activities',
-                     'nutrition_score','sleep_deprivation'
+                    'hist_demence_fam', 'hist_demence_parent', 'living_alone', 'income', 
+                    'retired', 'stroke', 'tbi', 'hta', 'diab_type2', 'obesity', 'depression', 
+                    'anxiety', 'smoking', 'alcohol', 'poly_pharm5', 'physical_activity', 
+                    'social_life', 'cognitive_activities', 'nutrition_score', 'sleep_deprivation'
                 ]
             )
             
@@ -47,29 +84,32 @@ def prediction_view(request):
             else:
                 result = predict_with_model_1(numeric_data)
 
-            # Convert risks to percentages
             result['risk_dementia'] = round(result['risk_dementia'] * 100, 2)
             result['risk_handicap'] = round(result['risk_handicap'] * 100, 2)
+            result['risk_dementia_comment'] = f"Risk of Dementia: {result['risk_dementia']}% ±5%"
+            result['risk_handicap_comment'] = f"Risk of Handicap: {result['risk_handicap']}% ±5%"
+            result['neurocog_age_flu_weight_comment'] = f"Neurocog Age Flu Weight: {result['neurocog_age_flu_weight']} ±1.5"
+            result['delta_neurocogage_flu_weight_comment'] = f"Delta Neurocog Age Flu Weight: {result['delta_neurocogage_flu_weight']} ±0.3"
 
-            # Define error range comments (example with ±5% error range)
-            result['risk_dementia_comment'] = f"Risk of Dementia: {result['risk_dementia']}% ±5% (Estimated Error Range)"
-            result['risk_handicap_comment'] = f"Risk of Handicap: {result['risk_handicap']}% ±5% (Estimated Error Range)"
-            result['neurocog_age_flu_weight_comment'] = f"Neurocog Age Flu Weight: {result['neurocog_age_flu_weight']} ±1.5 (Estimated Error Range)"
-            result['delta_neurocogage_flu_weight_comment'] = f"Delta Neurocog Age Flu Weight: {result['delta_neurocogage_flu_weight']} ±0.3 (Estimated Error Range)"
+            # ✅ Charger le DataFrame (lazy loading)
+            df = get_sample_dataframe()
 
-            # Create the main scatter plot with Plotly
             scatter_fig = go.Figure()
 
-            # Add sample data points
-            scatter_fig.add_trace(go.Scatter(
-                x=df['neurocog_age_flu_weight'],
-                y=df['age'],
-                mode='markers',
-                name='Sample Data',
-                marker=dict(color='blue', opacity=0.6)
-            ))
+            if len(df) > 0:
+                scatter_fig.add_trace(go.Scatter(
+                    x=df['neurocog_age_flu_weight'],
+                    y=df['age'],
+                    mode='markers',
+                    name='Sample Data',
+                    marker=dict(color='blue', opacity=0.6)
+                ))
+                age_min = df['age'].min()
+                age_max = df['age'].max()
+            else:
+                age_min = 50
+                age_max = 90
 
-            # Add user prediction point (always visible)
             scatter_fig.add_trace(go.Scatter(
                 x=[result['neurocog_age_flu_weight']],
                 y=[numeric_data['age']],
@@ -78,46 +118,24 @@ def prediction_view(request):
                 marker=dict(color='red', size=10)
             ))
 
-            # Add range slider for X-axis
             scatter_fig.update_layout(
                 xaxis=dict(
                     title='Neurocog Age Flu Weight',
-                    rangeslider=dict(visible=True),  # Enable range slider for X-axis
+                    rangeslider=dict(visible=True),
                     type='linear'
                 ),
                 yaxis=dict(
                     title='Age',
-                    range=[df['age'].min(), df['age'].max()]  # Set the default range to the min and max age
+                    range=[age_min, age_max]
                 ),
-                # Add simulated slider for Y-axis
                 updatemenus=[
                     dict(
                         buttons=list([
-                            dict(
-                                args=["yaxis.range", [df['age'].min(), df['age'].max()]],
-                                label="All Ages",
-                                method="relayout"
-                            ),
-                            dict(
-                                args=["yaxis.range", [df['age'].min(), df['age'].min() + 20]],
-                                label="0-20",
-                                method="relayout"
-                            ),
-                            dict(
-                                args=["yaxis.range", [df['age'].min() + 20, df['age'].min() + 40]],
-                                label="20-40",
-                                method="relayout"
-                            ),
-                            dict(
-                                args=["yaxis.range", [df['age'].min() + 40, df['age'].min() + 60]],
-                                label="40-60",
-                                method="relayout"
-                            ),
-                            dict(
-                                args=["yaxis.range", [df['age'].min() + 60, df['age'].max()]],
-                                label="60+",
-                                method="relayout"
-                            )
+                            dict(args=["yaxis.range", [age_min, age_max]], label="All Ages", method="relayout"),
+                            dict(args=["yaxis.range", [age_min, age_min + 20]], label="0-20", method="relayout"),
+                            dict(args=["yaxis.range", [age_min + 20, age_min + 40]], label="20-40", method="relayout"),
+                            dict(args=["yaxis.range", [age_min + 40, age_min + 60]], label="40-60", method="relayout"),
+                            dict(args=["yaxis.range", [age_min + 60, age_max]], label="60+", method="relayout")
                         ]),
                         direction="down",
                         showactive=True,
@@ -129,14 +147,12 @@ def prediction_view(request):
                 ]
             )
 
-            # Create a separate figure for gauges
             gauge_fig = go.Figure()
 
-            # Add gauge for Risk of Dementia
             gauge_fig.add_trace(go.Indicator(
                 mode="gauge+number",
                 value=result['risk_dementia'],
-                domain={'x': [0, 0.5], 'y': [0, 1]},  # Adjust position to left half
+                domain={'x': [0, 0.5], 'y': [0, 1]},
                 title={'text': "Risk of Dementia"},
                 gauge={
                     'axis': {'range': [0, 100]},
@@ -156,11 +172,10 @@ def prediction_view(request):
                 }
             ))
 
-            # Add gauge for Risk of Handicap
             gauge_fig.add_trace(go.Indicator(
                 mode="gauge+number",
                 value=result['risk_handicap'],
-                domain={'x': [0.5, 1], 'y': [0, 1]},  # Adjust position to right half
+                domain={'x': [0.5, 1], 'y': [0, 1]},
                 title={'text': "Risk of Handicap"},
                 gauge={
                     'axis': {'range': [0, 100]},
@@ -180,16 +195,15 @@ def prediction_view(request):
                 }
             ))
 
-            # Convert both figures to JSON format for rendering in the template
             scatter_json = pio.to_json(scatter_fig)
             gauge_json = pio.to_json(gauge_fig)
 
-            # Send the plots and result to the template
             return render(request, 'predictions/result.html', {
                 'result': result,
                 'scatter_json': scatter_json,
                 'gauge_json': gauge_json
             })
+    
     else:
         form = PredictionForm()
 

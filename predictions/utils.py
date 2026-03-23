@@ -1,15 +1,34 @@
-import pickle  # or any other method to load your model
-from pathlib import Path
+"""
+utils.py - VERSION CORRIGÉE POUR PRODUCTION
+Chemins relatifs + Lazy loading des modèles
+"""
+
+import pickle
 import joblib
+from pathlib import Path
 
-data_folder = Path("D:/Projects/CogniScreen/CogniScreen/Moncef_elise_rg order_2")
+# ========== CONFIGURATION DES CHEMINS ==========
 
+# BASE_DIR pointe vers predictions/
+BASE_DIR = Path(__file__).resolve().parent
+
+# Dossier des modèles
+MODEL_DIR = BASE_DIR / 'models'
+
+print(f"📂 utils.py - MODEL_DIR: {MODEL_DIR}")
+
+
+# ========== FONCTIONS UTILITAIRES ==========
 
 def load_model(model_path):
+    """Charge un modèle depuis un fichier .sav"""
+    if not model_path.exists():
+        raise FileNotFoundError(f"Modèle non trouvé : {model_path}")
     return joblib.load(model_path)
 
 
 def pred_to_proba(y_pred):
+    """Convertit les prédictions en probabilités (0-1)"""
     predictions = []
     for value in y_pred:
         value = int(value * 100)
@@ -17,32 +36,18 @@ def pred_to_proba(y_pred):
             value = 0
         elif value > 100:
             value = 100
-        else:
-            pass
         predictions.append(value / 100)
-
     return predictions
 
 
-# Load your model from the .sav file
-model_path = data_folder / 'Linear_reg_basic.sav'
-with open(model_path, 'rb') as model_file:
-    model = pickle.load(model_file)
+# ========== FONCTIONS DE PRÉDICTION ==========
 
-
-def predict_neurocog_age_flu_weight(data):
-    # Extract features from data
-    features = [data['age'], data['sex'], data['education'], data['language'], data['fluency_score']]
-
-    # Predict using your model
-    prediction = model.predict([features])
-
-    return prediction[0]
-
-
-# Example functions for predictions
 def predict_with_model_1(data):
-    # Extract only the necessary fields for this model
+    """
+    Prédiction avec modèle basique (5 features)
+    Features: age, sex, education, language, fluency_score
+    """
+    # Extraire les champs nécessaires
     necessary_fields = {
         'age': data['age'],
         'sex': data['sex'],
@@ -51,23 +56,23 @@ def predict_with_model_1(data):
         'fluency_score': data['fluency_score']
     }
 
-    # Load and use the model
-    model1 = load_model(data_folder / 'Linear_reg_basic.sav')
+    # ✅ Charger les modèles (lazy loading)
+    model1 = load_model(MODEL_DIR / 'Linear_reg_basic.sav')
     prediction = model1.predict([list(necessary_fields.values())])
 
-    # Calculate additional metrics
+    # Calculer les métriques
     age = float(data['age'])
     delta_neurocogage_flu_weight = prediction - age
     necessary_fields['neurocog_age_flu_weight'] = prediction[0]
 
-    model2 = load_model(data_folder / 'risk_dementia' / 'XGB_reg_basic.sav')
-    model3 = load_model(data_folder / 'risk_handicap' / 'XGB_reg_basic.sav')
+    # Modèles de risque
+    model2 = load_model(MODEL_DIR / 'risk_dementia' / 'XGB_reg_basic.sav')
+    model3 = load_model(MODEL_DIR / 'risk_handicap' / 'XGB_reg_basic.sav')
 
-    # Example placeholders for additional predictions
+    # Prédictions de risque
     risk_dementia = pred_to_proba(model2.predict([list(necessary_fields.values())]))
     risk_handicap = pred_to_proba(model3.predict([list(necessary_fields.values())]))
 
-    # Return the results
     return {
         'neurocog_age_flu_weight': int(prediction[0] * 100) / 100,
         'delta_neurocogage_flu_weight': int(delta_neurocogage_flu_weight[0] * 100) / 100,
@@ -77,7 +82,13 @@ def predict_with_model_1(data):
 
 
 def predict_with_model_2(data):
-    # Extract all fields for this model
+    """
+    Prédiction avec modèle complet (13 features)
+    Features: age, sex, education, language, fluency_score,
+              handedness, nb_language, hearing, moca, ravlt_imm,
+              ravlt_delay, logic_imm, logic_delay
+    """
+    # Extraire tous les champs
     all_fields = {
         'age': data['age'],
         'sex': data['sex'],
@@ -94,23 +105,23 @@ def predict_with_model_2(data):
         'logic_delay': data['logic_delay']
     }
 
-    # Load and use the model
-    model1 = load_model(data_folder / 'Linear_reg_all.sav')
+    # ✅ Charger les modèles
+    model1 = load_model(MODEL_DIR / 'Linear_reg_all.sav')
     prediction = model1.predict([list(all_fields.values())])
 
-    # Calculate additional metrics
+    # Calculer les métriques
     age = float(data['age'])
     delta_neurocogage_flu_weight = prediction - age
     all_fields['neurocog_age_flu_weight'] = prediction[0]
 
-    model2 = load_model(data_folder / 'risk_dementia' / 'XGB_reg_all.sav')
-    model3 = load_model(data_folder / 'risk_handicap' / 'XGB_reg_all.sav')
+    # Modèles de risque
+    model2 = load_model(MODEL_DIR / 'risk_dementia' / 'XGB_reg_all.sav')
+    model3 = load_model(MODEL_DIR / 'risk_handicap' / 'XGB_reg_all.sav')
 
-    # Example placeholders for additional predictions
+    # Prédictions de risque
     risk_dementia = pred_to_proba(model2.predict([list(all_fields.values())]))
     risk_handicap = pred_to_proba(model3.predict([list(all_fields.values())]))
 
-    # Return the results
     return {
         'neurocog_age_flu_weight': int(prediction[0] * 100) / 100,
         'delta_neurocogage_flu_weight': int(delta_neurocogage_flu_weight[0] * 100) / 100,
@@ -120,7 +131,11 @@ def predict_with_model_2(data):
 
 
 def predict_with_model_3(data):
-    # Extract all fields for this model
+    """
+    Prédiction avec modèle avancé (34 features)
+    Inclut tous les champs + facteurs de risque
+    """
+    # Extraire tous les champs plus facteurs de risque
     all_fields_plus_plus = {
         'age': data['age'],
         'sex': data['sex'],
@@ -157,23 +172,23 @@ def predict_with_model_3(data):
         'sleep_deprivation': data['sleep_deprivation']
     }
 
-    # Load and use the model
-    model1 = load_model(data_folder / 'Linear_reg_all_plus_plus.sav')
+    # ✅ Charger les modèles
+    model1 = load_model(MODEL_DIR / 'Linear_reg_all_plus_plus.sav')
     prediction = model1.predict([list(all_fields_plus_plus.values())])
 
-    # Calculate additional metrics
+    # Calculer les métriques
     age = float(data['age'])
     delta_neurocogage_flu_weight = prediction - age
     all_fields_plus_plus['neurocog_age_flu_weight'] = prediction[0]
 
-    model2 = load_model(data_folder / 'risk_dementia' / 'XGB_reg_all_plus_plus.sav')
-    model3 = load_model(data_folder / 'risk_handicap' / 'XGB_reg_all_plus_plus.sav')
+    # Modèles de risque
+    model2 = load_model(MODEL_DIR / 'risk_dementia' / 'XGB_reg_all_plus_plus.sav')
+    model3 = load_model(MODEL_DIR / 'risk_handicap' / 'XGB_reg_all_plus_plus.sav')
 
-    # Example placeholders for additional predictions
+    # Prédictions de risque
     risk_dementia = pred_to_proba(model2.predict([list(all_fields_plus_plus.values())]))
     risk_handicap = pred_to_proba(model3.predict([list(all_fields_plus_plus.values())]))
 
-    # Return the results
     return {
         'neurocog_age_flu_weight': int(prediction[0] * 100) / 100,
         'delta_neurocogage_flu_weight': int(delta_neurocogage_flu_weight[0] * 100) / 100,
