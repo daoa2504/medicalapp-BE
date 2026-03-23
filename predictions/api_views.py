@@ -16,11 +16,12 @@ from .centile_curves import (
     calculate_patient_centile_lms
 )
 
+from pathlib import Path
 
-# ========== CONFIGURATION DU MODÈLE NCA ==========
+BASE_DIR = Path(__file__).resolve().parent.parent
+DATA_PATH = BASE_DIR / "predictions" / "Data_NCA_exposome.xlsx"
+NCA_MODEL_PATH = BASE_DIR / "predictions" / "nca_models_with_nan" / "LGBM_with_nan.sav"
 
-# Chemin vers le modèle NCA
-NCA_MODEL_PATH = "predictions/nca_models_with_nan/LGBM_with_nan.sav"
 
 # Définition des 34 features (dans le bon ordre !)
 FEATURES_ALL_PLUS_PLUS = [
@@ -370,8 +371,7 @@ def predict_api(request):
         print("📥 Requête reçue :", input_data.keys())
         
         # ========== 1. CHARGER LES DONNÉES DE RÉFÉRENCE ==========
-        data_path = "D:/Projects/CogniScreen/CogniScreen/Moncef_elise_rg order_2/Data_NCA_exposome.xlsx"
-        
+        data_path = DATA_PATH
         if not os.path.exists(data_path):
             return Response(
                 {'error': f'Fichier non trouvé: {data_path}'},
@@ -596,7 +596,7 @@ def model_info_api(request):
 def health_check(request):
     """Health check"""
     try:
-        data_path = "D:/Projects/CogniScreen/CogniScreen/Moncef_elise_rg order_2/Data_NCA_exposome.xlsx"
+        data_path = DATA_PATH
         data_exists = os.path.exists(data_path)
         model_exists = os.path.exists(NCA_MODEL_PATH)
         
