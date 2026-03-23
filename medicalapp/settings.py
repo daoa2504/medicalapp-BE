@@ -25,7 +25,7 @@ SECRET_KEY = 'django-insecure--m94qg-v_zk*u)od3l^r!+j*)_)6^an!t=1ilo_tye+58#e$g)
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['*']
 
 
 # Application definition
@@ -59,6 +59,7 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://localhost:5173",  # Si vous utilisez Vite
     "http://localhost:5174",  # Si vous utilisez Vite
+    "https://medicalapp-fe-production.up.railway.app",
 ]
 
 ROOT_URLCONF = 'medicalapp.urls'
@@ -72,7 +73,9 @@ REST_FRAMEWORK = {
         'rest_framework.parsers.JSONParser',
     ],
 }
-
+CSRF_TRUSTED_ORIGINS = [
+    "https://medicalapp-fe-production.up.railway.app",
+]
 
 TEMPLATES = [
     {
@@ -144,3 +147,5 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/5.0/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+CORS_ALLOW_ALL_ORIGINS = True
