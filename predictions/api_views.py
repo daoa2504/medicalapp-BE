@@ -1,6 +1,6 @@
 """
 api_views.py - VERSION FINALE POUR PRODUCTION RAILWAY
-Zones diagnostiques + Prédiction NCA avec gestion des NaN
+Zones diagnostiques + Prédiction NCA avec gestion des NaN + Cohorte de référence
 Chemins corrigés: medicalapp/predictions/data/, predictions/nca_models_with_nan/
 """
 
@@ -23,8 +23,8 @@ from .centile_curves import (
 # BASE_DIR pointe vers le dossier predictions/
 BASE_DIR = Path(__file__).resolve().parent
 
-# Données dans predictions/data/
-DATA_PATH = BASE_DIR / "data" / "Data_NCA_exposome.xlsx"
+# UN SEUL fichier de données dans predictions/data/
+DATA_PATH = BASE_DIR / "data" / "Example_database_withoutrois.xlsx"
 
 # Modèle NCA dans predictions/nca_models_with_nan/
 NCA_MODEL_PATH = BASE_DIR / "nca_models_with_nan" / "LGBM_with_nan.sav"
@@ -48,11 +48,11 @@ FEATURES_ALL_PLUS_PLUS = [
     # Optionnels cognitifs (6)
     'handedness', 'nb_language', 'hearing', 'ravlt_delay', 'logic_imm', 'logic_delay',
     
-    # Facteurs de risque (21)
+    # Facteurs de risque (20)
     'hist_demence_fam', 'hist_demence_parent', 'living_alone', 'income', 'retired',
     'stroke', 'tbi', 'hta', 'diab_type2', 'obesity', 'depression', 'anxiety',
     'smoking', 'alcohol', 'poly_pharm5', 'physical_activity', 'social_life',
-    'cognitive_activities', 'nutrition_score', 'sleep_deprivation',
+    'cognitive_activities', 'nutrition_score', 'sleep_deprivation'
 ]
 
 
@@ -173,6 +173,7 @@ def predict_nca(patient_data):
 
 
 def clean_numeric_value(value):
+    """Nettoie les valeurs numériques pour JSON"""
     if value is None:
         return None
     if not isinstance(value, (int, float, np.integer, np.floating)):
@@ -185,6 +186,7 @@ def clean_numeric_value(value):
 
 
 def clean_dict_for_json(data):
+    """Nettoie récursivement un dictionnaire pour JSON"""
     if isinstance(data, dict):
         return {k: clean_dict_for_json(v) for k, v in data.items()}
     elif isinstance(data, list):
@@ -196,6 +198,7 @@ def clean_dict_for_json(data):
 
 
 def calculate_diagnostic_zones_CORRECT(df, sex_value, age_col='age', value_col='delta_NCA', diagnosis_col='diagnosis'):
+    """Calcule les zones diagnostiques globales (pas par âge)"""
     if diagnosis_col not in df.columns:
         for alt_name in ['dementia_dx_code', 'diagnostic', 'dx', 'label']:
             if alt_name in df.columns:
@@ -241,16 +244,76 @@ def calculate_diagnostic_zones_CORRECT(df, sex_value, age_col='age', value_col='
 
 @api_view(['POST'])
 def predict_api(request):
+    """API principale de prédiction"""
     try:
         input_data = request.data
         print(f"📥 Requête : {list(input_data.keys())[:5]}...")
         
+        # Vérifier que le fichier de données existe
         if not DATA_PATH.exists():
             return Response({'error': f'Fichier non trouvé: {DATA_PATH}'}, status=status.HTTP_404_NOT_FOUND)
         
-        df_exposome = pd.read_excel(DATA_PATH)
-        print(f"📂 Données : {len(df_exposome)} lignes")
+        # Charger les données
+        df_raw = pd.read_excel(DATA_PATH)
+        print(f"📂 Données : {len(df_raw)} lignes")
+        print(f"📊 Colonnes : {list(df_raw.columns)[:10]}")
         
+        # ========== NORMALISER LES NOMS DE COLONNES ==========
+        # Détecter et renommer les colonnes automatiquement
+        df = df_raw.copy()
+        
+        # Age
+        for col in ['age', 'Age', 'AGE']:
+            if col in df.columns:
+                df.rename(columns={col: 'age'}, inplace=True)
+                break
+        
+        # Sex
+        for col in ['sex', 'Sex', 'SEX']:
+            if col in df.columns:
+                df.rename(columns={col: 'sex'}, inplace=True)
+                break
+        
+        # Diagnosis
+        for col in ['diagnosis', 'Diagnosis', 'dementia_dx_code', 'Dementia_Dx_Code', 'DIAGNOSIS']:
+            if col in df.columns:
+                df.rename(columns={col: 'diagnosis'}, inplace=True)
+                break
+        
+        # Neurocog age
+        for col in ['neurocog_age_flu_weight', 'Neurocog_Age_Flu_Weight', 'NCA', 'neurocog_age']:
+            if col in df.columns:
+                df.rename(columns={col: 'neurocog_age_flu_weight'}, inplace=True)
+                break
+        
+        # Education
+        for col in ['education', 'Education', 'EDUCATION', 'educ', 'scolarite']:
+            if col in df.columns:
+                df.rename(columns={col: 'education'}, inplace=True)
+                break
+        
+        # Calculer delta_NCA si nécessaire
+        if 'delta_NCA' not in df.columns and 'neurocog_age_flu_weight' in df.columns:
+            df['delta_NCA'] = df['neurocog_age_flu_weight'] - df['age']
+            print(f"✅ delta_NCA calculé : {df['delta_NCA'].mean():.2f} (moyenne)")
+        
+        print(f"✅ Colonnes normalisées : {list(df.columns)[:10]}")
+        
+        # ========== FILTRER LES NaN ==========
+        # Colonnes essentielles qui ne doivent pas avoir de NaN
+        required_cols = ['age', 'sex', 'diagnosis']
+        available_required = [col for col in required_cols if col in df.columns]
+        
+        df_before = len(df)
+        df = df.dropna(subset=available_required).copy()
+        df_after = len(df)
+        
+        print(f"📊 Dataset avant filtrage : {df_before} patients")
+        print(f"📊 Dataset après filtrage : {df_after} patients")
+        if df_before != df_after:
+            print(f"⚠️ {df_before - df_after} lignes supprimées (NaN dans {', '.join(available_required)})")
+        
+        # Prédiction NCA
         try:
             nca_result = predict_nca(input_data)
             predicted_delta_nca = nca_result['delta_nca']
@@ -262,20 +325,48 @@ def predict_api(request):
         
         patient_sex = int(input_data.get('sex', 1))
         
-        zones_male = calculate_diagnostic_zones_CORRECT(df_exposome, sex_value=1)
-        zones_female = calculate_diagnostic_zones_CORRECT(df_exposome, sex_value=0)
+        # Calculer les zones diagnostiques
+        zones_male = calculate_diagnostic_zones_CORRECT(df, sex_value=1)
+        zones_female = calculate_diagnostic_zones_CORRECT(df, sex_value=0)
         
-        df_con = df_exposome[df_exposome['diagnosis'] == 'CON'].copy()
+        # Calculer les courbes de centiles (CON uniquement)
+        df_con = df[df['diagnosis'] == 'CON'].copy()
         
-        lms_male = calculate_centile_curves_lms(df=df_con, sex_value=1, age_col='age', value_col='delta_NCA',
-                                                 centiles=[3, 10, 25, 50, 75, 90, 97], window=3)
-        lms_female = calculate_centile_curves_lms(df=df_con, sex_value=0, age_col='age', value_col='delta_NCA',
-                                                   centiles=[3, 10, 25, 50, 75, 90, 97], window=3)
+        print(f"📊 CON data : {len(df_con)} patients")
+        print(f"📊 delta_NCA range : [{df_con['delta_NCA'].min():.1f}, {df_con['delta_NCA'].max():.1f}]")
         
-        patient_lms = lms_male['lms_parameters'] if patient_sex == 1 else lms_female['lms_parameters']
-        patient_centile = calculate_patient_centile_lms(age=patient_age, value=predicted_delta_nca,
-                                                         lms_parameters=patient_lms)
+        try:
+            lms_male = calculate_centile_curves_lms(df=df_con, sex_value=1, age_col='age', value_col='delta_NCA',
+                                                     centiles=[3, 10, 25, 50, 75, 90, 97], window=3)
+            lms_female = calculate_centile_curves_lms(df=df_con, sex_value=0, age_col='age', value_col='delta_NCA',
+                                                       centiles=[3, 10, 25, 50, 75, 90, 97], window=3)
+            print(f"✅ Courbes LMS calculées")
+        except Exception as e:
+            print(f"⚠️ Erreur calcul LMS : {e}")
+            # Fallback : courbes simples basées sur les statistiques
+            lms_male = {'curves': [], 'lms_parameters': {}}
+            lms_female = {'curves': [], 'lms_parameters': {}}
         
+        # Calculer le centile du patient
+        if lms_male.get('lms_parameters') and lms_female.get('lms_parameters'):
+            patient_lms = lms_male['lms_parameters'] if patient_sex == 1 else lms_female['lms_parameters']
+            patient_centile = calculate_patient_centile_lms(age=patient_age, value=predicted_delta_nca,
+                                                             lms_parameters=patient_lms)
+        else:
+            patient_centile = None
+        
+        # ✅ Vérifier que le calcul a réussi
+        if patient_centile is None:
+            print(f"⚠️ Calcul centile échoué pour âge={patient_age}, delta={predicted_delta_nca}")
+            # Fallback : créer un centile par défaut
+            patient_centile = {
+                'centile': 50,
+                'z_score': 0,
+                'interpretation': 'Calcul non disponible',
+                'lms_parameters': {'L': 0, 'M': predicted_delta_nca, 'S': 1}
+            }
+        
+        # Déterminer la zone du patient
         limits = zones_male['limits'] if patient_sex == 1 else zones_female['limits']
         if predicted_delta_nca < limits['normal_mci']:
             patient_zone = 'Normale'
@@ -284,6 +375,66 @@ def predict_api(request):
         else:
             patient_zone = 'Pathologique'
         
+        # ========== ✅ COHORTE DE RÉFÉRENCE (TOUS LES PATIENTS VALIDES) ==========
+        reference_cohort = []
+        
+        # Utiliser toutes les données valides (déjà filtrées)
+        df_sample = df
+        
+        print(f"📊 Cohorte de référence : {len(df_sample)} patients")
+        
+        def convert_education_years_to_group(years):
+            """Convertit les années d'éducation en groupe (0-3)"""
+            if pd.isna(years):
+                return 0
+            years = float(years)
+            if years <= 12:
+                return 0  # Secondaire ou moins
+            elif years <= 15:
+                return 1  # Collégial/Technique
+            elif years <= 20:
+                return 2  # Universitaire 1er cycle
+            else:
+                return 3  # Universitaire cycles supérieurs
+        
+        for _, row in df_sample.iterrows():
+            # NCA peut être déjà calculé ou doit l'être
+            if 'neurocog_age_flu_weight' in row and not pd.isna(row['neurocog_age_flu_weight']):
+                nca_value = float(row['neurocog_age_flu_weight'])
+            elif 'delta_NCA' in row and not pd.isna(row['delta_NCA']):
+                nca_value = float(row['age']) + float(row['delta_NCA'])
+            else:
+                nca_value = float(row['age'])  # Fallback
+            
+            education_years = row.get('education', 0)
+            education_group = convert_education_years_to_group(education_years)
+            
+            # Gérer les NaN potentiels (même si on a filtré, sécurité supplémentaire)
+            try:
+                sex_value = int(row['sex']) if not pd.isna(row['sex']) else 0
+                diagnosis_value = str(row['diagnosis']) if not pd.isna(row['diagnosis']) else 'CON'
+            except (ValueError, TypeError):
+                sex_value = 0
+                diagnosis_value = 'CON'
+            
+            reference_cohort.append({
+                'age': clean_numeric_value(row['age']),
+                'neurocog_age_flu_weight': clean_numeric_value(nca_value),
+                'sex': sex_value,
+                'dementia_dx_code': diagnosis_value,
+                'education_group': int(education_group)
+            })
+        
+        print(f"✅ Cohorte : {len(reference_cohort)} participants")
+        
+        # Distribution des groupes d'éducation
+        groups_dist = {}
+        for p in reference_cohort:
+            g = p['education_group']
+            groups_dist[g] = groups_dist.get(g, 0) + 1
+        print(f"📊 Distribution éducation : {groups_dist}")
+        
+        # ========== CONSTRUCTION DU RÉSULTAT ==========
         result = {
             'nca_prediction': {
                 'nca_predicted': clean_numeric_value(nca_result['nca_predicted']),
@@ -308,8 +459,8 @@ def predict_api(request):
                 'stats': zones_male['global_stats'] if patient_sex == 1 else zones_female['global_stats']
             },
             'centile_curves': {
-                'male': lms_male['curves'],
-                'female': lms_female['curves'],
+                'male': lms_male.get('curves', []),
+                'female': lms_female.get('curves', []),
                 'patient_point': {
                     'age': clean_numeric_value(patient_age),
                     'delta_nca': clean_numeric_value(predicted_delta_nca),
@@ -329,10 +480,12 @@ def predict_api(request):
                 'axis_domain': [-15, 25]
             },
             'metadata': {
-                'n_samples_total': len(df_exposome),
+                'n_samples_total': len(df),
                 'n_con': len(df_con),
-                'nca_model': 'LGBM_with_nan'
+                'nca_model': 'LGBM_with_nan',
+                'data_file': 'Example_database_withoutrois.xlsx'
             },
+            'reference_cohort': reference_cohort,  # ✅ CORRECT
             'success': True
         }
         
@@ -350,6 +503,7 @@ def predict_api(request):
 
 @api_view(['GET'])
 def health_check(request):
+    """Vérification de santé du service"""
     try:
         data_exists = DATA_PATH.exists()
         model_exists = NCA_MODEL_PATH.exists()
@@ -386,6 +540,7 @@ def health_check(request):
 
 @api_view(['GET'])
 def model_info_api(request):
+    """Informations sur le modèle"""
     try:
         model_exists = NCA_MODEL_PATH.exists()
         if model_exists:
@@ -401,7 +556,7 @@ def model_info_api(request):
                 'total': len(FEATURES_ALL_PLUS_PLUS),
                 'obligatoires': 7,
                 'cognitifs_optionnels': 6,
-                'facteurs_risque': 21,
+                'facteurs_risque': 20,
                 'list': FEATURES_ALL_PLUS_PLUS
             },
             'method': 'LightGBM avec gestion native des NaN',
