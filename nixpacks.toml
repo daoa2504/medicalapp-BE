@@ -1,2 +1,10 @@
+# nixpacks.toml
+
 [phases.setup]
-aptPkgs = ["libgomp1", "libgfortran5"]
+aptPkgs = ["libgomp1", "libgfortran5", "gcc", "g++"]
+
+[phases.install]
+cmds = ["pip install -r requirements.txt"]
+
+[start]
+cmd = "gunicorn medicalapp.wsgi:application --bind 0.0.0.0:$PORT"
