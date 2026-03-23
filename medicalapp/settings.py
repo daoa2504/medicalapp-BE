@@ -56,9 +56,6 @@ MIDDLEWARE = [
 
 ]
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",
-    "http://localhost:5173",  # Si vous utilisez Vite
-    "http://localhost:5174",  # Si vous utilisez Vite
     "https://medicalapp-fe-production.up.railway.app",
 ]
 
