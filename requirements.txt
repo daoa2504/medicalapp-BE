@@ -2,3 +2,7 @@ Django>=4.2
 gunicorn
 django-cors-headers
 djangorestframework
+numpy
+pandas
+joblib
+openpyxl
