@@ -1,7 +1,6 @@
 """
 api_views.py - VERSION FINALE POUR PRODUCTION RAILWAY
-Zones diagnostiques + Prédiction NCA avec gestion des NaN + Cohorte de référence
-Chemins corrigés: medicalapp/predictions/data/, predictions/nca_models_with_nan/
+Zones diagnostiques + Prédiction NCA avec gestion des NaN + Cohorte de référence + Risques ML
 """
 
 from rest_framework.decorators import api_view
@@ -20,26 +19,24 @@ from .centile_curves import (
 
 # ========== CHEMINS CORRIGÉS POUR PRODUCTION ==========
 
-# BASE_DIR pointe vers le dossier predictions/
 BASE_DIR = Path(__file__).resolve().parent
-
-# UN SEUL fichier de données dans predictions/data/
 DATA_PATH = BASE_DIR / "data" / "Example_database_withoutrois.xlsx"
-
-# Modèle NCA dans predictions/nca_models_with_nan/
 NCA_MODEL_PATH = BASE_DIR / "nca_models_with_nan" / "LGBM_with_nan.sav"
-
-# Modèles de régression dans predictions/models/ (si utilisés)
 MODELS_DIR = BASE_DIR / "models"
 
-# Log des chemins au démarrage
+# Modèles de risque
+RISK_DEMENTIA_MODEL_PATH = BASE_DIR / "risk_dementia" / "LGBM_reg_all_plus_plus.sav"
+RISK_HANDICAP_MODEL_PATH = BASE_DIR / "risk_handicap" / "LGBM_reg_all_plus_plus.sav"
+
 print(f"\n📂 Configuration des chemins :")
 print(f"   BASE_DIR: {BASE_DIR}")
 print(f"   DATA_PATH: {DATA_PATH}")
 print(f"   NCA_MODEL_PATH: {NCA_MODEL_PATH}")
+print(f"   RISK_DEMENTIA_MODEL_PATH: {RISK_DEMENTIA_MODEL_PATH}")
+print(f"   RISK_HANDICAP_MODEL_PATH: {RISK_HANDICAP_MODEL_PATH}")
 
 
-# ========== DÉFINITION DES 34 FEATURES ==========
+# ========== DÉFINITION DES 33 FEATURES ==========
 
 FEATURES_ALL_PLUS_PLUS = [
     # Obligatoires (7)
@@ -68,27 +65,17 @@ def load_nca_model():
         if not NCA_MODEL_PATH.exists():
             error_msg = f"❌ Modèle NCA non trouvé : {NCA_MODEL_PATH}"
             print(error_msg)
-            print(f"\n📂 Contenu de {BASE_DIR}:")
-            if BASE_DIR.exists():
-                for item in BASE_DIR.iterdir():
-                    print(f"   {'📁' if item.is_dir() else '📄'} {item.name}")
             raise FileNotFoundError(error_msg)
         
         print(f"\n📦 Chargement modèle NCA : {NCA_MODEL_PATH}")
-        print(f"   Taille : {NCA_MODEL_PATH.stat().st_size / 1024 / 1024:.2f} MB")
-        
-        try:
-            _NCA_MODEL = joblib.load(NCA_MODEL_PATH)
-            print(f"✅ Modèle chargé : {type(_NCA_MODEL).__name__}")
-        except Exception as e:
-            print(f"❌ Erreur : {e}")
-            raise
+        _NCA_MODEL = joblib.load(NCA_MODEL_PATH)
+        print(f"✅ Modèle chargé : {type(_NCA_MODEL).__name__}")
     
     return _NCA_MODEL
 
 
 def prepare_nca_features(patient_data):
-    """Prépare 34 features avec np.nan pour manquants"""
+    """Prépare 33 features avec np.nan pour manquants"""
     features = []
     for feature_name in FEATURES_ALL_PLUS_PLUS:
         value = patient_data.get(feature_name)
@@ -115,7 +102,7 @@ def predict_nca(patient_data):
             'delta_nca': 5.0,
             'age_chronologique': age,
             'n_features_used': 0,
-            'n_features_total': 34,
+            'n_features_total': 33,
             'completeness': 0.0,
             'reliability': 'Non disponible',
             'reliability_stars': '',
@@ -172,6 +159,169 @@ def predict_nca(patient_data):
     }
 
 
+# ========== MODÈLES DE RISQUE ==========
+
+_risk_models_cache = {
+    'dementia': None,
+    'handicap': None
+}
+
+
+def load_risk_model(model_type='dementia'):
+    """Charge le modèle de risque (démence ou handicap) avec cache"""
+    global _risk_models_cache
+    
+    if _risk_models_cache[model_type] is not None:
+        return _risk_models_cache[model_type]
+    
+    model_path = RISK_DEMENTIA_MODEL_PATH if model_type == 'dementia' else RISK_HANDICAP_MODEL_PATH
+    
+    if not model_path.exists():
+        print(f"⚠️ Modèle de risque {model_type} non trouvé : {model_path}")
+        return None
+    
+    try:
+        model = joblib.load(model_path)
+        _risk_models_cache[model_type] = model
+        print(f"✅ Modèle de risque {model_type} chargé : {model_path.name}")
+        return model
+    except Exception as e:
+        print(f"❌ Erreur chargement modèle {model_type} : {e}")
+        return None
+def safe_float(value, default=np.nan):
+    """Convertit en float; None, '', 'null', NaN invalides -> default"""
+    if value is None:
+        return default
+    if value == '' or value == 'null':
+        return default
+    try:
+        v = float(value)
+        if np.isnan(v) or np.isinf(v):
+            return default
+        return v
+    except (ValueError, TypeError):
+        return default
+
+def prepare_risk_features(input_data):
+    """Prépare les features pour les modèles de risque (33 features)"""
+    features_dict = {}
+
+    # Obligatoires (7)
+    features_dict['age'] = safe_float(input_data.get('age'), 0)
+    features_dict['sex'] = safe_float(input_data.get('sex'), 0)
+    features_dict['education'] = safe_float(input_data.get('education'), 0)
+    features_dict['language'] = safe_float(input_data.get('language'), 0)
+    features_dict['fluency_score'] = safe_float(input_data.get('fluency_score'), 0)
+    features_dict['moca'] = safe_float(input_data.get('moca'), 0)
+    features_dict['ravlt_imm'] = safe_float(input_data.get('ravlt_imm'), 0)
+
+    # Optionnels cognitifs (6)
+    features_dict['handedness'] = safe_float(input_data.get('handedness'))
+    features_dict['nb_language'] = safe_float(input_data.get('nb_language'))
+    features_dict['hearing'] = safe_float(input_data.get('hearing'))
+    features_dict['ravlt_delay'] = safe_float(input_data.get('ravlt_delay'))
+    features_dict['logic_imm'] = safe_float(input_data.get('logic_imm'))
+    features_dict['logic_delay'] = safe_float(input_data.get('logic_delay'))
+
+    # Facteurs de risque (20)
+    features_dict['hist_demence_fam'] = safe_float(input_data.get('hist_demence_fam'))
+    features_dict['hist_demence_parent'] = safe_float(input_data.get('hist_demence_parent'))
+    features_dict['living_alone'] = safe_float(input_data.get('living_alone'))
+    features_dict['income'] = safe_float(input_data.get('income'))
+    features_dict['retired'] = safe_float(input_data.get('retired'))
+    features_dict['stroke'] = safe_float(input_data.get('stroke'))
+    features_dict['tbi'] = safe_float(input_data.get('tbi'))
+    features_dict['hta'] = safe_float(input_data.get('hta'))
+    features_dict['diab_type2'] = safe_float(input_data.get('diab_type2'))
+    features_dict['obesity'] = safe_float(input_data.get('obesity'))
+    features_dict['depression'] = safe_float(input_data.get('depression'))
+    features_dict['anxiety'] = safe_float(input_data.get('anxiety'))
+    features_dict['smoking'] = safe_float(input_data.get('smoking'))
+    features_dict['alcohol'] = safe_float(input_data.get('alcohol'))
+    features_dict['poly_pharm5'] = safe_float(input_data.get('poly_pharm5'))
+    features_dict['physical_activity'] = safe_float(input_data.get('physical_activity'))
+    features_dict['social_life'] = safe_float(input_data.get('social_life'))
+    features_dict['cognitive_activities'] = safe_float(input_data.get('cognitive_activities'))
+    features_dict['nutrition_score'] = safe_float(input_data.get('nutrition_score'))
+    features_dict['sleep_deprivation'] = safe_float(input_data.get('sleep_deprivation'))
+
+    features_df = pd.DataFrame([features_dict], columns=FEATURES_ALL_PLUS_PLUS)
+    return features_df
+
+
+def predict_risk_scores(input_data):
+    """Prédit les scores de risque avec les modèles ML (0-100%)"""
+    
+    features_df = prepare_risk_features(input_data)
+    print("DEBUG risk features:")
+    print(features_df.T)
+    print(features_df.dtypes)
+    model_dementia = load_risk_model('dementia')
+    model_handicap = load_risk_model('handicap')
+
+    
+    print("TYPE model_dementia:", type(model_dementia))
+    print("TYPE model_handicap:", type(model_handicap))
+    print("HAS predict dementia:", hasattr(model_dementia, "predict"))
+    print("HAS predict handicap:", hasattr(model_handicap, "predict"))
+
+    pred = model_dementia.predict(features_df)
+    print("RAW pred dementia repr:", repr(pred))
+
+
+    risk_dementia = 56.0
+    risk_handicap = 50.0
+    
+    if model_dementia is not None:
+        try:
+            pred = model_dementia.predict(features_df)
+            print("DEBUG dementia predict raw:", pred, type(pred))
+
+            if pred is None:
+                raise ValueError("model_dementia.predict(...) returned None")
+
+            pred_value = pred[0] if hasattr(pred, "__len__") else pred
+            print("DEBUG dementia pred_value:", pred_value, type(pred_value))
+
+            if pred_value is None:
+                raise ValueError("pred_value is None")
+
+            risk_dementia = float(pred_value)
+            risk_dementia = max(0.0, min(100.0, risk_dementia))
+
+        except Exception as e:
+            print(f"⚠️ Erreur prédiction risque démence : {e}")
+            risk_dementia = 50.0
+    
+    if model_handicap is not None:
+        try:
+            pred = model_handicap.predict(features_df)
+            print("DEBUG handicap predict raw:", pred, type(pred))
+
+            if pred is None:
+                raise ValueError("model_handicap.predict(...) returned None")
+
+            pred_value = pred[0] if hasattr(pred, "__len__") else pred
+            print("DEBUG handicap pred_value:", pred_value, type(pred_value))
+
+            if pred_value is None:
+                raise ValueError("pred_value is None")
+
+            risk_handicap = float(pred_value)
+            risk_handicap = max(0.0, min(100.0, risk_handicap))
+
+        except Exception as e:
+            print(f"⚠️ Erreur prédiction risque handicap : {e}")
+            risk_handicap = 50.0
+    
+    return {
+        'risk_dementia': risk_dementia,
+        'risk_handicap': risk_handicap
+    }
+
+
+# ========== UTILITAIRES ==========
+
 def clean_numeric_value(value):
     """Nettoie les valeurs numériques pour JSON"""
     if value is None:
@@ -198,7 +348,7 @@ def clean_dict_for_json(data):
 
 
 def calculate_diagnostic_zones_CORRECT(df, sex_value, age_col='age', value_col='delta_NCA', diagnosis_col='diagnosis'):
-    """Calcule les zones diagnostiques globales (pas par âge)"""
+    """Calcule les zones diagnostiques globales"""
     if diagnosis_col not in df.columns:
         for alt_name in ['dementia_dx_code', 'diagnostic', 'dx', 'label']:
             if alt_name in df.columns:
@@ -242,6 +392,8 @@ def calculate_diagnostic_zones_CORRECT(df, sex_value, age_col='age', value_col='
     }
 
 
+# ========== API ENDPOINTS ==========
+
 @api_view(['POST'])
 def predict_api(request):
     """API principale de prédiction"""
@@ -249,58 +401,45 @@ def predict_api(request):
         input_data = request.data
         print(f"📥 Requête : {list(input_data.keys())[:5]}...")
         
-        # Vérifier que le fichier de données existe
         if not DATA_PATH.exists():
             return Response({'error': f'Fichier non trouvé: {DATA_PATH}'}, status=status.HTTP_404_NOT_FOUND)
         
-        # Charger les données
         df_raw = pd.read_excel(DATA_PATH)
         print(f"📂 Données : {len(df_raw)} lignes")
-        print(f"📊 Colonnes : {list(df_raw.columns)[:10]}")
         
-        # ========== NORMALISER LES NOMS DE COLONNES ==========
-        # Détecter et renommer les colonnes automatiquement
+        # Normaliser les noms de colonnes
         df = df_raw.copy()
         
-        # Age
         for col in ['age', 'Age', 'AGE']:
             if col in df.columns:
                 df.rename(columns={col: 'age'}, inplace=True)
                 break
         
-        # Sex
         for col in ['sex', 'Sex', 'SEX']:
             if col in df.columns:
                 df.rename(columns={col: 'sex'}, inplace=True)
                 break
         
-        # Diagnosis
-        for col in ['diagnosis', 'Diagnosis', 'dementia_dx_code', 'Dementia_Dx_Code', 'DIAGNOSIS']:
+        for col in ['diagnosis', 'Diagnosis', 'dementia_dx_code', 'Dementia_Dx_Code']:
             if col in df.columns:
                 df.rename(columns={col: 'diagnosis'}, inplace=True)
                 break
         
-        # Neurocog age
-        for col in ['neurocog_age_flu_weight', 'Neurocog_Age_Flu_Weight', 'NCA', 'neurocog_age']:
+        for col in ['neurocog_age_flu_weight', 'Neurocog_Age_Flu_Weight', 'NCA']:
             if col in df.columns:
                 df.rename(columns={col: 'neurocog_age_flu_weight'}, inplace=True)
                 break
         
-        # Education
-        for col in ['education', 'Education', 'EDUCATION', 'educ', 'scolarite']:
+        for col in ['education', 'Education', 'educ']:
             if col in df.columns:
                 df.rename(columns={col: 'education'}, inplace=True)
                 break
         
-        # Calculer delta_NCA si nécessaire
         if 'delta_NCA' not in df.columns and 'neurocog_age_flu_weight' in df.columns:
             df['delta_NCA'] = df['neurocog_age_flu_weight'] - df['age']
-            print(f"✅ delta_NCA calculé : {df['delta_NCA'].mean():.2f} (moyenne)")
+            print(f"✅ delta_NCA calculé : {df['delta_NCA'].mean():.2f}")
         
-        print(f"✅ Colonnes normalisées : {list(df.columns)[:10]}")
-        
-        # ========== FILTRER LES NaN ==========
-        # Colonnes essentielles qui ne doivent pas avoir de NaN
+        # Filtrer les NaN
         required_cols = ['age', 'sex', 'diagnosis']
         available_required = [col for col in required_cols if col in df.columns]
         
@@ -311,43 +450,32 @@ def predict_api(request):
         print(f"📊 Dataset avant filtrage : {df_before} patients")
         print(f"📊 Dataset après filtrage : {df_after} patients")
         if df_before != df_after:
-            print(f"⚠️ {df_before - df_after} lignes supprimées (NaN dans {', '.join(available_required)})")
+            print(f"⚠️ {df_before - df_after} lignes supprimées (NaN)")
         
         # Prédiction NCA
-        try:
-            nca_result = predict_nca(input_data)
-            predicted_delta_nca = nca_result['delta_nca']
-            patient_age = nca_result['age_chronologique']
-        except ValueError as e:
-            return Response({'error': f'Validation : {str(e)}'}, status=status.HTTP_400_BAD_REQUEST)
-        except Exception as e:
-            return Response({'error': f'Erreur NCA : {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        
+        nca_result = predict_nca(input_data)
+        predicted_delta_nca = nca_result['delta_nca']
+        patient_age = nca_result['age_chronologique']
         patient_sex = int(input_data.get('sex', 1))
         
-        # Calculer les zones diagnostiques
+        # Zones diagnostiques
         zones_male = calculate_diagnostic_zones_CORRECT(df, sex_value=1)
         zones_female = calculate_diagnostic_zones_CORRECT(df, sex_value=0)
         
-        # Calculer les courbes de centiles (CON uniquement)
+        # Courbes de centiles
         df_con = df[df['diagnosis'] == 'CON'].copy()
-        
-        print(f"📊 CON data : {len(df_con)} patients")
-        print(f"📊 delta_NCA range : [{df_con['delta_NCA'].min():.1f}, {df_con['delta_NCA'].max():.1f}]")
         
         try:
             lms_male = calculate_centile_curves_lms(df=df_con, sex_value=1, age_col='age', value_col='delta_NCA',
                                                      centiles=[3, 10, 25, 50, 75, 90, 97], window=3)
             lms_female = calculate_centile_curves_lms(df=df_con, sex_value=0, age_col='age', value_col='delta_NCA',
                                                        centiles=[3, 10, 25, 50, 75, 90, 97], window=3)
-            print(f"✅ Courbes LMS calculées")
         except Exception as e:
             print(f"⚠️ Erreur calcul LMS : {e}")
-            # Fallback : courbes simples basées sur les statistiques
             lms_male = {'curves': [], 'lms_parameters': {}}
             lms_female = {'curves': [], 'lms_parameters': {}}
         
-        # Calculer le centile du patient
+        # Centile patient
         if lms_male.get('lms_parameters') and lms_female.get('lms_parameters'):
             patient_lms = lms_male['lms_parameters'] if patient_sex == 1 else lms_female['lms_parameters']
             patient_centile = calculate_patient_centile_lms(age=patient_age, value=predicted_delta_nca,
@@ -355,10 +483,7 @@ def predict_api(request):
         else:
             patient_centile = None
         
-        # ✅ Vérifier que le calcul a réussi
         if patient_centile is None:
-            print(f"⚠️ Calcul centile échoué pour âge={patient_age}, delta={predicted_delta_nca}")
-            # Fallback : créer un centile par défaut
             patient_centile = {
                 'centile': 50,
                 'z_score': 0,
@@ -366,7 +491,7 @@ def predict_api(request):
                 'lms_parameters': {'L': 0, 'M': predicted_delta_nca, 'S': 1}
             }
         
-        # Déterminer la zone du patient
+        # Zone patient
         limits = zones_male['limits'] if patient_sex == 1 else zones_female['limits']
         if predicted_delta_nca < limits['normal_mci']:
             patient_zone = 'Normale'
@@ -375,41 +500,33 @@ def predict_api(request):
         else:
             patient_zone = 'Pathologique'
         
-        # ========== ✅ COHORTE DE RÉFÉRENCE (TOUS LES PATIENTS VALIDES) ==========
+        # Cohorte de référence
         reference_cohort = []
-        
-        # Utiliser toutes les données valides (déjà filtrées)
         df_sample = df
         
-        print(f"📊 Cohorte de référence : {len(df_sample)} patients")
-        
         def convert_education_years_to_group(years):
-            """Convertit les années d'éducation en groupe (0-3)"""
             if pd.isna(years):
                 return 0
             years = float(years)
             if years <= 12:
-                return 0  # Secondaire ou moins
+                return 0
             elif years <= 15:
-                return 1  # Collégial/Technique
+                return 1
             elif years <= 20:
-                return 2  # Universitaire 1er cycle
+                return 2
             else:
-                return 3  # Universitaire cycles supérieurs
+                return 3
         
         for _, row in df_sample.iterrows():
-            # NCA peut être déjà calculé ou doit l'être
             if 'neurocog_age_flu_weight' in row and not pd.isna(row['neurocog_age_flu_weight']):
                 nca_value = float(row['neurocog_age_flu_weight'])
             elif 'delta_NCA' in row and not pd.isna(row['delta_NCA']):
                 nca_value = float(row['age']) + float(row['delta_NCA'])
             else:
-                nca_value = float(row['age'])  # Fallback
+                nca_value = float(row['age'])
             
-            education_years = row.get('education', 0)
-            education_group = convert_education_years_to_group(education_years)
+            education_group = convert_education_years_to_group(row.get('education', 0))
             
-            # Gérer les NaN potentiels (même si on a filtré, sécurité supplémentaire)
             try:
                 sex_value = int(row['sex']) if not pd.isna(row['sex']) else 0
                 diagnosis_value = str(row['diagnosis']) if not pd.isna(row['diagnosis']) else 'CON'
@@ -427,14 +544,13 @@ def predict_api(request):
         
         print(f"✅ Cohorte : {len(reference_cohort)} participants")
         
-        # Distribution des groupes d'éducation
-        groups_dist = {}
-        for p in reference_cohort:
-            g = p['education_group']
-            groups_dist[g] = groups_dist.get(g, 0) + 1
-        print(f"📊 Distribution éducation : {groups_dist}")
+        # Calcul des risques
+        risk_scores = predict_risk_scores(input_data=input_data)
         
-        # ========== CONSTRUCTION DU RÉSULTAT ==========
+        print(f"📊 Risque démence : {risk_scores['risk_dementia']:.1f}%")
+        print(f"📊 Risque handicap : {risk_scores['risk_handicap']:.1f}%")
+        
+        # Résultat
         result = {
             'nca_prediction': {
                 'nca_predicted': clean_numeric_value(nca_result['nca_predicted']),
@@ -485,7 +601,11 @@ def predict_api(request):
                 'nca_model': 'LGBM_with_nan',
                 'data_file': 'Example_database_withoutrois.xlsx'
             },
-            'reference_cohort': reference_cohort,  # ✅ CORRECT
+            'risk_scores': {
+                'risk_dementia': clean_numeric_value(risk_scores['risk_dementia']),
+                'risk_handicap': clean_numeric_value(risk_scores['risk_handicap'])
+            },
+            'reference_cohort': reference_cohort,
             'success': True
         }
         
@@ -507,31 +627,23 @@ def health_check(request):
     try:
         data_exists = DATA_PATH.exists()
         model_exists = NCA_MODEL_PATH.exists()
+        risk_dementia_exists = RISK_DEMENTIA_MODEL_PATH.exists()
+        risk_handicap_exists = RISK_HANDICAP_MODEL_PATH.exists()
+        
         model_loaded = False
-        model_error = None
         try:
             model = load_nca_model()
             model_loaded = True
-        except Exception as e:
-            model_error = str(e)
-        
-        available_files = {}
-        if BASE_DIR.exists():
-            for subdir in ['data', 'models', 'nca_models_with_nan']:
-                dir_path = BASE_DIR / subdir
-                if dir_path.exists():
-                    available_files[subdir] = [f.name for f in dir_path.iterdir() if f.is_file()]
+        except:
+            pass
         
         return Response({
             'status': 'healthy' if (data_exists and model_loaded) else 'warning',
             'data_file_exists': data_exists,
-            'data_file_path': str(DATA_PATH),
             'nca_model_exists': model_exists,
-            'nca_model_path': str(NCA_MODEL_PATH),
             'nca_model_loaded': model_loaded,
-            'nca_model_error': model_error,
-            'available_files': available_files,
-            'base_dir': str(BASE_DIR),
+            'risk_dementia_model_exists': risk_dementia_exists,
+            'risk_handicap_model_exists': risk_handicap_exists,
             'success': True
         })
     except Exception as e:
@@ -542,16 +654,11 @@ def health_check(request):
 def model_info_api(request):
     """Informations sur le modèle"""
     try:
-        model_exists = NCA_MODEL_PATH.exists()
-        if model_exists:
-            model = load_nca_model()
-            model_info = {'loaded': True, 'type': str(type(model).__name__), 'n_features': len(FEATURES_ALL_PLUS_PLUS)}
-        else:
-            model_info = {'loaded': False, 'error': f'Modèle non trouvé : {NCA_MODEL_PATH}'}
+        model = load_nca_model()
         
         return Response({
             'model_type': 'Cognitive Aging - NCA avec gestion NaN',
-            'nca_model': model_info,
+            'nca_model': {'loaded': True, 'type': str(type(model).__name__)},
             'features': {
                 'total': len(FEATURES_ALL_PLUS_PLUS),
                 'obligatoires': 7,
