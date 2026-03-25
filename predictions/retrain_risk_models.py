@@ -14,7 +14,7 @@ from pathlib import Path
 
 # Chemins (à adapter selon votre configuration)
 BASE_DIR = Path(__file__).resolve().parent
-DATA_PATH = BASE_DIR / "data" / "Example_database_withoutrois.xlsx"
+DATA_PATH = BASE_DIR / "data" / "Example_database_withoutrois1.xlsx"
 
 OUTPUT_DIR_DEMENTIA = Path("risk_dementia")
 OUTPUT_DIR_HANDICAP = Path("risk_handicap")
@@ -28,19 +28,17 @@ OUTPUT_DIR_HANDICAP.mkdir(exist_ok=True)
 
 # Features pour le modèle all_plus_plus (sans neurocog_age_flu_weight, sans risk_dementia)
 FEATURES_ALL_PLUS_PLUS = [
-    # Obligatoires (7)
-    'age', 'sex', 'education', 'language', 'fluency_score', 
-    'moca', 'ravlt_imm',
+    # Obligatoires (6) - ENLEVÉ : ravlt_imm
+    'age', 'sex', 'education', 'language', 'fluency_score', 'moca',
     
-    # Optionnels cognitifs (6)
-    'handedness', 'nb_language', 'hearing', 'ravlt_delay', 
-    'logic_imm', 'logic_delay',
+    # Optionnels cognitifs (3) - ENLEVÉ : ravlt_delay, logic_imm, logic_delay
+    'handedness', 'nb_language', 'hearing',
     
-    # Facteurs de risque (20)
-    'hist_demence_fam', 'hist_demence_parent', 'living_alone', 
-    'income', 'retired', 'stroke', 'tbi', 'hta', 'diab_type2', 
-    'obesity', 'depression', 'anxiety', 'smoking', 'alcohol', 
-    'poly_pharm5', 'physical_activity', 'social_life', 
+    # Facteurs de risque (21) - INCHANGÉS
+    'hist_demence_fam', 'hist_demence_parent', 'living_alone', 'income', 'retired',
+    'stroke', 'tbi', 'hta', 'diab_type2', 'chol_total',
+    'obesity', 'depression', 'anxiety',
+    'smoking', 'alcohol', 'poly_pharm5', 'physical_activity', 'social_life',
     'cognitive_activities', 'nutrition_score', 'sleep_deprivation'
 ]
 

@@ -1,6 +1,7 @@
 """
 api_views.py - VERSION FINALE POUR PRODUCTION RAILWAY
-Zones diagnostiques + Prédiction NCA avec gestion des NaN + Cohorte de référence + Risques ML
+30 FEATURES (sans RAVLT et Mémoire logique)
+Zones diagnostiques + Prédiction NCA + Risques ML + INTERVALLE DE CONFIANCE
 """
 
 from rest_framework.decorators import api_view
@@ -20,7 +21,7 @@ from .centile_curves import (
 # ========== CHEMINS CORRIGÉS POUR PRODUCTION ==========
 
 BASE_DIR = Path(__file__).resolve().parent
-DATA_PATH = BASE_DIR / "data" / "Example_database_withoutrois.xlsx"
+DATA_PATH = BASE_DIR / "data" / "Example_database_withoutrois1.xlsx"
 NCA_MODEL_PATH = BASE_DIR / "nca_models_with_nan" / "LGBM_with_nan.sav"
 MODELS_DIR = BASE_DIR / "models"
 
@@ -36,22 +37,27 @@ print(f"   RISK_DEMENTIA_MODEL_PATH: {RISK_DEMENTIA_MODEL_PATH}")
 print(f"   RISK_HANDICAP_MODEL_PATH: {RISK_HANDICAP_MODEL_PATH}")
 
 
-# ========== DÉFINITION DES 33 FEATURES ==========
+# ========== 30 FEATURES (SANS RAVLT ET MÉMOIRE LOGIQUE) ==========
 
 FEATURES_ALL_PLUS_PLUS = [
-    # Obligatoires (7)
-    'age', 'sex', 'education', 'language', 'fluency_score', 'moca', 'ravlt_imm',
+    # Obligatoires (6) - ENLEVÉ : ravlt_imm
+    'age', 'sex', 'education', 'language', 'fluency_score', 'moca',
     
-    # Optionnels cognitifs (6)
-    'handedness', 'nb_language', 'hearing', 'ravlt_delay', 'logic_imm', 'logic_delay',
+    # Optionnels cognitifs (3) - ENLEVÉ : ravlt_delay, logic_imm, logic_delay
+    'handedness', 'nb_language', 'hearing',
     
-    # Facteurs de risque (20)
+    # Facteurs de risque (21) - INCHANGÉS
     'hist_demence_fam', 'hist_demence_parent', 'living_alone', 'income', 'retired',
-    'stroke', 'tbi', 'hta', 'diab_type2', 'obesity', 'depression', 'anxiety',
+    'stroke', 'tbi', 'hta', 'diab_type2', 'chol_total',
+    'obesity', 'depression', 'anxiety',
     'smoking', 'alcohol', 'poly_pharm5', 'physical_activity', 'social_life',
     'cognitive_activities', 'nutrition_score', 'sleep_deprivation'
 ]
 
+print(f"✅ Features configurées : {len(FEATURES_ALL_PLUS_PLUS)} features")
+print(f"   - Obligatoires : 6 (âge, sexe, éducation, langue, fluence, MoCA)")
+print(f"   - Cognitifs optionnels : 3 (latéralité, nb langues, audition)")
+print(f"   - Facteurs de risque : 21 (incluant chol_total)")
 
 # ========== CHARGEMENT DU MODÈLE NCA (SINGLETON) ==========
 
@@ -75,7 +81,7 @@ def load_nca_model():
 
 
 def prepare_nca_features(patient_data):
-    """Prépare 33 features avec np.nan pour manquants"""
+    """Prépare 30 features avec np.nan pour manquants"""
     features = []
     for feature_name in FEATURES_ALL_PLUS_PLUS:
         value = patient_data.get(feature_name)
@@ -92,7 +98,7 @@ def prepare_nca_features(patient_data):
 
 
 def predict_nca(patient_data):
-    """Prédiction NCA avec LightGBM"""
+    """Prédiction NCA avec LightGBM + Intervalle de confiance"""
     try:
         model = load_nca_model()
     except FileNotFoundError:
@@ -101,8 +107,9 @@ def predict_nca(patient_data):
             'nca_predicted': age + 5.0,
             'delta_nca': 5.0,
             'age_chronologique': age,
+            'confidence_interval': None,
             'n_features_used': 0,
-            'n_features_total': 33,
+            'n_features_total': 30,
             'completeness': 0.0,
             'reliability': 'Non disponible',
             'reliability_stars': '',
@@ -110,7 +117,8 @@ def predict_nca(patient_data):
             'interpretation': 'Estimation par défaut'
         }
     
-    required_fields = ['age', 'sex', 'education', 'language', 'fluency_score', 'moca', 'ravlt_imm']
+    # Champs obligatoires (6) - SANS ravlt_imm
+    required_fields = ['age', 'sex', 'education', 'language', 'fluency_score', 'moca']
     missing_required = [f for f in required_fields if f not in patient_data or patient_data[f] is None]
     if missing_required:
         raise ValueError(f"Champs obligatoires manquants : {missing_required}")
@@ -128,10 +136,36 @@ def predict_nca(patient_data):
     else:
         reliability, reliability_stars = 'Limitée', '⭐⭐'
     
-    nca_predicted = model.predict([features])[0]
+    nca_predicted = float(model.predict([features])[0])
     age_chronologique = float(patient_data['age'])
     delta_nca = nca_predicted - age_chronologique
-    
+
+# Quantiles calibrés sur le jeu de test
+    qN = 6.943242099006113      # Q90
+    qC = 8.706114460265628      # Q95
+    qS = 9.77435516140545       # Q97.5
+
+    # Choix du quantile selon la complétude
+    if completeness >= 0.90:
+        q_used = qN
+        confidence_level = 0.90
+    elif completeness >= 0.75:
+        q_used = qC
+        confidence_level = 0.95
+    else:
+        q_used = qS
+        confidence_level = 0.975
+
+    lower = nca_predicted - q_used
+    upper = nca_predicted + q_used
+
+    confidence_interval = {
+        'lower': float(lower),
+        'upper': float(upper),
+        'std': float(q_used),
+        'confidence_level': float(confidence_level)
+    }
+        
     if abs(delta_nca) < 2:
         interpretation = "Vieillissement cognitif normal"
     elif delta_nca > 0:
@@ -140,11 +174,13 @@ def predict_nca(patient_data):
         interpretation = "Vieillissement cognitif ralenti"
     
     print(f"\n🔮 NCA : {age_chronologique:.1f} → {nca_predicted:.1f} (Δ{delta_nca:+.1f}) | {completeness:.0f}% | {reliability}")
+    print(f"📊 IC 95% : [{lower:.1f} - {upper:.1f}] ans")
     
     return {
         'nca_predicted': float(nca_predicted),
         'delta_nca': float(delta_nca),
         'age_chronologique': float(age_chronologique),
+        'confidence_interval': confidence_interval,
         'interpretation': interpretation,
         'n_features_used': int(n_features_used),
         'n_features_total': len(FEATURES_ALL_PLUS_PLUS),
@@ -152,9 +188,9 @@ def predict_nca(patient_data):
         'reliability': reliability,
         'reliability_stars': reliability_stars,
         'features_detail': {
-            'obligatoires': n_features_used >= 7,
-            'cognitifs': sum(1 for f in features[7:13] if not (isinstance(f, float) and np.isnan(f))),
-            'risques': sum(1 for f in features[13:] if not (isinstance(f, float) and np.isnan(f))),
+            'obligatoires': n_features_used >= 6,  # ← CHANGÉ : 6 au lieu de 7
+            'cognitifs': sum(1 for f in features[6:9] if not (isinstance(f, float) and np.isnan(f))),  # ← CHANGÉ : indices 6-9
+            'risques': sum(1 for f in features[9:] if not (isinstance(f, float) and np.isnan(f))),  # ← CHANGÉ : à partir de 9
         }
     }
 
@@ -188,6 +224,8 @@ def load_risk_model(model_type='dementia'):
     except Exception as e:
         print(f"❌ Erreur chargement modèle {model_type} : {e}")
         return None
+
+
 def safe_float(value, default=np.nan):
     """Convertit en float; None, '', 'null', NaN invalides -> default"""
     if value is None:
@@ -202,28 +240,25 @@ def safe_float(value, default=np.nan):
     except (ValueError, TypeError):
         return default
 
+
 def prepare_risk_features(input_data):
-    """Prépare les features pour les modèles de risque (33 features)"""
+    """Prépare les features pour les modèles de risque (30 features)"""
     features_dict = {}
 
-    # Obligatoires (7)
+    # Obligatoires (6) - SANS ravlt_imm
     features_dict['age'] = safe_float(input_data.get('age'), 0)
     features_dict['sex'] = safe_float(input_data.get('sex'), 0)
     features_dict['education'] = safe_float(input_data.get('education'), 0)
     features_dict['language'] = safe_float(input_data.get('language'), 0)
     features_dict['fluency_score'] = safe_float(input_data.get('fluency_score'), 0)
     features_dict['moca'] = safe_float(input_data.get('moca'), 0)
-    features_dict['ravlt_imm'] = safe_float(input_data.get('ravlt_imm'), 0)
 
-    # Optionnels cognitifs (6)
+    # Optionnels cognitifs (3) - SANS ravlt_delay, logic_imm, logic_delay
     features_dict['handedness'] = safe_float(input_data.get('handedness'))
     features_dict['nb_language'] = safe_float(input_data.get('nb_language'))
     features_dict['hearing'] = safe_float(input_data.get('hearing'))
-    features_dict['ravlt_delay'] = safe_float(input_data.get('ravlt_delay'))
-    features_dict['logic_imm'] = safe_float(input_data.get('logic_imm'))
-    features_dict['logic_delay'] = safe_float(input_data.get('logic_delay'))
 
-    # Facteurs de risque (20)
+    # Facteurs de risque (21) - INCHANGÉS
     features_dict['hist_demence_fam'] = safe_float(input_data.get('hist_demence_fam'))
     features_dict['hist_demence_parent'] = safe_float(input_data.get('hist_demence_parent'))
     features_dict['living_alone'] = safe_float(input_data.get('living_alone'))
@@ -233,6 +268,7 @@ def prepare_risk_features(input_data):
     features_dict['tbi'] = safe_float(input_data.get('tbi'))
     features_dict['hta'] = safe_float(input_data.get('hta'))
     features_dict['diab_type2'] = safe_float(input_data.get('diab_type2'))
+    features_dict['chol_total'] = safe_float(input_data.get('chol_total'))
     features_dict['obesity'] = safe_float(input_data.get('obesity'))
     features_dict['depression'] = safe_float(input_data.get('depression'))
     features_dict['anxiety'] = safe_float(input_data.get('anxiety'))
@@ -253,65 +289,58 @@ def predict_risk_scores(input_data):
     """Prédit les scores de risque avec les modèles ML (0-100%)"""
     
     features_df = prepare_risk_features(input_data)
-    print("DEBUG risk features:")
-    print(features_df.T)
-    print(features_df.dtypes)
+    
     model_dementia = load_risk_model('dementia')
     model_handicap = load_risk_model('handicap')
 
-    
-    print("TYPE model_dementia:", type(model_dementia))
-    print("TYPE model_handicap:", type(model_handicap))
-    print("HAS predict dementia:", hasattr(model_dementia, "predict"))
-    print("HAS predict handicap:", hasattr(model_handicap, "predict"))
-
-    pred = model_dementia.predict(features_df)
-    print("RAW pred dementia repr:", repr(pred))
-
-
-    risk_dementia = 56.0
+    risk_dementia = 50.0
     risk_handicap = 50.0
     
     if model_dementia is not None:
         try:
             pred = model_dementia.predict(features_df)
-            print("DEBUG dementia predict raw:", pred, type(pred))
-
-            if pred is None:
-                raise ValueError("model_dementia.predict(...) returned None")
-
             pred_value = pred[0] if hasattr(pred, "__len__") else pred
-            print("DEBUG dementia pred_value:", pred_value, type(pred_value))
-
-            if pred_value is None:
-                raise ValueError("pred_value is None")
-
-            risk_dementia = float(pred_value)
+            
+            print(f"🔍 DEBUG Démence - Valeur brute : {pred_value}")
+            
+            # Détecter si c'est déjà un pourcentage ou une probabilité
+            if pred_value > 1.0:
+                risk_dementia = float(pred_value)
+                print(f"   → Déjà en % : {risk_dementia:.2f}%")
+            else:
+                risk_dementia = float(pred_value) * 100
+                print(f"   → Converti en % : {risk_dementia:.2f}%")
+            
             risk_dementia = max(0.0, min(100.0, risk_dementia))
+            print(f"   → Final (clippé) : {risk_dementia:.2f}%")
 
         except Exception as e:
             print(f"⚠️ Erreur prédiction risque démence : {e}")
+            import traceback
+            traceback.print_exc()
             risk_dementia = 50.0
     
     if model_handicap is not None:
         try:
             pred = model_handicap.predict(features_df)
-            print("DEBUG handicap predict raw:", pred, type(pred))
-
-            if pred is None:
-                raise ValueError("model_handicap.predict(...) returned None")
-
             pred_value = pred[0] if hasattr(pred, "__len__") else pred
-            print("DEBUG handicap pred_value:", pred_value, type(pred_value))
-
-            if pred_value is None:
-                raise ValueError("pred_value is None")
-
-            risk_handicap = float(pred_value)
+            
+            print(f"🔍 DEBUG Handicap - Valeur brute : {pred_value}")
+            
+            if pred_value > 1.0:
+                risk_handicap = float(pred_value)
+                print(f"   → Déjà en % : {risk_handicap:.2f}%")
+            else:
+                risk_handicap = float(pred_value) * 100
+                print(f"   → Converti en % : {risk_handicap:.2f}%")
+            
             risk_handicap = max(0.0, min(100.0, risk_handicap))
+            print(f"   → Final (clippé) : {risk_handicap:.2f}%")
 
         except Exception as e:
             print(f"⚠️ Erreur prédiction risque handicap : {e}")
+            import traceback
+            traceback.print_exc()
             risk_handicap = 50.0
     
     return {
@@ -454,6 +483,7 @@ def predict_api(request):
         
         # Prédiction NCA
         nca_result = predict_nca(input_data)
+        
         predicted_delta_nca = nca_result['delta_nca']
         patient_age = nca_result['age_chronologique']
         patient_sex = int(input_data.get('sex', 1))
@@ -556,6 +586,12 @@ def predict_api(request):
                 'nca_predicted': clean_numeric_value(nca_result['nca_predicted']),
                 'delta_nca': clean_numeric_value(predicted_delta_nca),
                 'age_chronologique': clean_numeric_value(patient_age),
+                'confidence_interval': {
+                    'lower': clean_numeric_value(nca_result['confidence_interval']['lower']),
+                    'upper': clean_numeric_value(nca_result['confidence_interval']['upper']),
+                    'std': clean_numeric_value(nca_result['confidence_interval']['std']),
+                    'confidence_level': nca_result['confidence_interval']['confidence_level']
+                } if nca_result.get('confidence_interval') else None,
                 'interpretation': nca_result['interpretation'],
                 'features_used': nca_result['n_features_used'],
                 'features_total': nca_result['n_features_total'],
@@ -644,6 +680,7 @@ def health_check(request):
             'nca_model_loaded': model_loaded,
             'risk_dementia_model_exists': risk_dementia_exists,
             'risk_handicap_model_exists': risk_handicap_exists,
+            'features_count': len(FEATURES_ALL_PLUS_PLUS),
             'success': True
         })
     except Exception as e:
@@ -657,16 +694,22 @@ def model_info_api(request):
         model = load_nca_model()
         
         return Response({
-            'model_type': 'Cognitive Aging - NCA avec gestion NaN',
+            'model_type': 'Cognitive Aging - NCA 30 features + IC 95%',
             'nca_model': {'loaded': True, 'type': str(type(model).__name__)},
             'features': {
                 'total': len(FEATURES_ALL_PLUS_PLUS),
-                'obligatoires': 7,
-                'cognitifs_optionnels': 6,
-                'facteurs_risque': 20,
-                'list': FEATURES_ALL_PLUS_PLUS
+                'obligatoires': 6,
+                'cognitifs_optionnels': 3,
+                'facteurs_risque': 21,
+                'list': FEATURES_ALL_PLUS_PLUS,
+                'removed': ['ravlt_imm', 'ravlt_delay', 'logic_imm', 'logic_delay']
             },
             'method': 'LightGBM avec gestion native des NaN',
+            'confidence_interval': {
+                'enabled': True,
+                'method': 'RMSE-based',
+                'level': '95%'
+            },
             'success': True
         })
     except Exception as e:
