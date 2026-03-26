@@ -140,21 +140,11 @@ def predict_nca(patient_data):
     age_chronologique = float(patient_data['age'])
     delta_nca = nca_predicted - age_chronologique
 
-# Quantiles calibrés sur le jeu de test
-    qN = 6.943242099006113      # Q90
-    qC = 8.706114460265628      # Q95
-    qS = 9.77435516140545       # Q97.5
-
-    # Choix du quantile selon la complétude
-    if completeness >= 0.90:
-        q_used = qN
-        confidence_level = 0.90
-    elif completeness >= 0.75:
-        q_used = qC
-        confidence_level = 0.95
-    else:
-        q_used = qS
-        confidence_level = 0.975
+# ── Intervalle de confiance ──────────────────────────────────────────────
+    # Valeur statique temporaire : ±2.5 ans
+    # TODO : remplacer par interpolation sur quantiles calibrés
+    q_used = 2.5
+    confidence_level = 0.95
 
     lower = nca_predicted - q_used
     upper = nca_predicted + q_used
@@ -285,64 +275,68 @@ def prepare_risk_features(input_data):
     return features_df
 
 
+def _score_from_proba(obj, features_df):
+    """
+    Calcule un score de risque en % à partir d'un modèle LGBMClassifier
+    sauvegardé sous forme de dict {'model': ..., 'class_map': ...}.
+
+    Les classes sont {0: faible, 1: modéré, 2: élevé} correspondant aux
+    valeurs ordinales {0.0, 0.5, 1.0}.
+    Score = P(modéré)*50 + P(élevé)*100  → toujours dans [0, 100].
+    """
+    model = obj['model'] if isinstance(obj, dict) else obj
+
+    if hasattr(model, 'predict_proba'):
+        # Nouveau format : LGBMClassifier — predict_proba → [P(0), P(0.5), P(1)]
+        proba = model.predict_proba(features_df)[0]
+        if len(proba) == 3:
+            score = float(proba[1]) * 50.0 + float(proba[2]) * 100.0
+        else:
+            # Fallback binaire : P(classe 1) * 100
+            score = float(proba[-1]) * 100.0
+        print(f"   → predict_proba : {[f'{p:.3f}' for p in proba]}  score={score:.1f}%")
+    else:
+        # Ancien format : LGBMRegressor — predict → valeur dans [0, 1]
+        pred_value = float(model.predict(features_df)[0])
+        score = pred_value * 100.0 if pred_value <= 1.0 else pred_value
+        print(f"   → predict (régression) : {pred_value:.4f}  score={score:.1f}%")
+
+    return max(0.0, min(100.0, score))
+
+
 def predict_risk_scores(input_data):
     """Prédit les scores de risque avec les modèles ML (0-100%)"""
-    
+
     features_df = prepare_risk_features(input_data)
-    
-    model_dementia = load_risk_model('dementia')
-    model_handicap = load_risk_model('handicap')
+
+    obj_dementia = load_risk_model('dementia')
+    obj_handicap = load_risk_model('handicap')
 
     risk_dementia = 50.0
     risk_handicap = 50.0
-    
-    if model_dementia is not None:
-        try:
-            pred = model_dementia.predict(features_df)
-            pred_value = pred[0] if hasattr(pred, "__len__") else pred
-            
-            print(f"🔍 DEBUG Démence - Valeur brute : {pred_value}")
-            
-            # Détecter si c'est déjà un pourcentage ou une probabilité
-            if pred_value > 1.0:
-                risk_dementia = float(pred_value)
-                print(f"   → Déjà en % : {risk_dementia:.2f}%")
-            else:
-                risk_dementia = float(pred_value) * 100
-                print(f"   → Converti en % : {risk_dementia:.2f}%")
-            
-            risk_dementia = max(0.0, min(100.0, risk_dementia))
-            print(f"   → Final (clippé) : {risk_dementia:.2f}%")
 
+    if obj_dementia is not None:
+        try:
+            print(f"🔍 DEBUG Démence :")
+            risk_dementia = _score_from_proba(obj_dementia, features_df)
+            print(f"   → Final : {risk_dementia:.2f}%")
         except Exception as e:
             print(f"⚠️ Erreur prédiction risque démence : {e}")
             import traceback
             traceback.print_exc()
             risk_dementia = 50.0
-    
-    if model_handicap is not None:
-        try:
-            pred = model_handicap.predict(features_df)
-            pred_value = pred[0] if hasattr(pred, "__len__") else pred
-            
-            print(f"🔍 DEBUG Handicap - Valeur brute : {pred_value}")
-            
-            if pred_value > 1.0:
-                risk_handicap = float(pred_value)
-                print(f"   → Déjà en % : {risk_handicap:.2f}%")
-            else:
-                risk_handicap = float(pred_value) * 100
-                print(f"   → Converti en % : {risk_handicap:.2f}%")
-            
-            risk_handicap = max(0.0, min(100.0, risk_handicap))
-            print(f"   → Final (clippé) : {risk_handicap:.2f}%")
 
+    if obj_handicap is not None:
+        try:
+            print(f"🔍 DEBUG Handicap :")
+            risk_handicap = _score_from_proba(obj_handicap, features_df)
+            print(f"   → Final : {risk_handicap:.2f}%")
         except Exception as e:
             print(f"⚠️ Erreur prédiction risque handicap : {e}")
             import traceback
             traceback.print_exc()
             risk_handicap = 50.0
-    
+
     return {
         'risk_dementia': risk_dementia,
         'risk_handicap': risk_handicap
