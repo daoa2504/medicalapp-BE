@@ -21,13 +21,24 @@ from .centile_curves import (
 # ========== CHEMINS CORRIGÉS POUR PRODUCTION ==========
 
 BASE_DIR = Path(__file__).resolve().parent
+
+# Donnees reelles de la cohorte (1119 patients, 51 colonnes)
+# Utilisees pour : zones diagnostiques, courbes de centiles, cohorte de reference
 DATA_PATH = BASE_DIR / "data" / "Example_database_withoutrois1.xlsx"
-NCA_MODEL_PATH = BASE_DIR / "nca_models_with_nan" / "LGBM_with_nan.sav"
+
+# Tous les modeles sont regroupes dans models/ avec sous-dossiers :
+#   models/nca/              -> LGBM NCA (prediction delta) + classifieur diagnostic
+#   models/nca_regression/   -> Linear Regression basic/all/all_plus_plus (utils.py)
+#   models/risk_dementia/    -> XGB + LGBM pour le risque de demence
+#   models/risk_handicap/    -> XGB + LGBM pour le risque de perte d'autonomie
 MODELS_DIR = BASE_DIR / "models"
 
-# Modèles de risque
-RISK_DEMENTIA_MODEL_PATH = BASE_DIR / "risk_dementia" / "LGBM_reg_all_plus_plus.sav"
-RISK_HANDICAP_MODEL_PATH = BASE_DIR / "risk_handicap" / "LGBM_reg_all_plus_plus.sav"
+# Modele 1 du pipeline : predit l'age neurocognitif (NCA) a partir de 30 features
+NCA_MODEL_PATH = MODELS_DIR / "nca" / "LGBM_with_nan.sav"
+
+# Modeles de risque (LGBMClassifier, 3 classes : faible/modere/eleve)
+RISK_DEMENTIA_MODEL_PATH = MODELS_DIR / "risk_dementia" / "LGBM_reg_all_plus_plus.sav"
+RISK_HANDICAP_MODEL_PATH = MODELS_DIR / "risk_handicap" / "LGBM_reg_all_plus_plus.sav"
 
 print(f"\n📂 Configuration des chemins :")
 print(f"   BASE_DIR: {BASE_DIR}")
@@ -59,9 +70,46 @@ print(f"   - Obligatoires : 6 (âge, sexe, éducation, langue, fluence, MoCA)")
 print(f"   - Cognitifs optionnels : 3 (latéralité, nb langues, audition)")
 print(f"   - Facteurs de risque : 21 (incluant chol_total)")
 
-# ========== CHARGEMENT DU MODÈLE NCA (SINGLETON) ==========
+# ========== CHARGEMENT DES MODÈLES NCA (SINGLETON) ==========
+#
+# Deux modeles NCA travaillent ensemble dans un pipeline :
+#   1. LGBM NCA (regression) : predit le delta NCA (age neurocognitif - age reel)
+#      a partir des 30 features du patient
+#   2. LGBM Classifieur (classification) : predit le diagnostic (CON/SCD/MCI/AD)
+#      a partir des 30 features + le delta predit par le modele 1
+#
+# Le classifieur remplace les anciens seuils hardcodes (accuracy 56.6% -> 69.4%)
+# car il utilise toutes les features (moca, comorbidites, etc.) pour classifier,
+# pas seulement le delta NCA.
+#
+# Les deux modeles sont charges en singleton (une seule fois au premier appel)
+# pour eviter de relire les fichiers .sav a chaque requete.
+
+DIAG_CLASSIFIER_PATH = MODELS_DIR / "nca" / "LGBM_diagnosis_classifier.sav"
 
 _NCA_MODEL = None
+_DIAG_CLASSIFIER = None
+
+
+def load_diag_classifier():
+    """
+    Charge le classifieur de diagnostic LGBM (Modele 2 du pipeline).
+    Ce modele prend en entree les 30 features NCA + le delta predit
+    et retourne un diagnostic : CON, SCD, MCI ou AD.
+    Entraine sur les donnees augmentees (1369 patients) avec accuracy 69.4%.
+    """
+    global _DIAG_CLASSIFIER
+
+    if _DIAG_CLASSIFIER is None:
+        if not DIAG_CLASSIFIER_PATH.exists():
+            print(f"⚠️ Classifieur diagnostic non trouve : {DIAG_CLASSIFIER_PATH}")
+            return None
+
+        print(f"📦 Chargement classifieur diagnostic : {DIAG_CLASSIFIER_PATH}")
+        _DIAG_CLASSIFIER = joblib.load(DIAG_CLASSIFIER_PATH)
+        print(f"✅ Classifieur charge : {type(_DIAG_CLASSIFIER).__name__}")
+
+    return _DIAG_CLASSIFIER
 
 def load_nca_model():
     """Charge le modèle NCA (une seule fois)"""
@@ -461,13 +509,36 @@ def predict_api(request):
         if 'delta_NCA' not in df.columns and 'neurocog_age_flu_weight' in df.columns:
             df['delta_NCA'] = df['neurocog_age_flu_weight'] - df['age']
             print(f"✅ delta_NCA calculé : {df['delta_NCA'].mean():.2f}")
+
+        # Si la colonne 'diagnosis' n'existe pas dans le fichier Excel
+        # (ex: fichier simule sans dementia_dx_code), on la derive de risk_dementia.
+        # C'est un fallback : le fichier reel (Example_database_withoutrois1.xlsx)
+        # a deja une colonne dementia_dx_code qui est renommee en 'diagnosis' ci-dessus.
+        # Mapping : risk_dementia 0.0 -> CON, 0.5 -> MCI, 1.0 -> AD
+        if 'diagnosis' not in df.columns and 'risk_dementia' in df.columns:
+            def risk_to_diagnosis(val):
+                if val <= 0.25:
+                    return 'CON'
+                elif val <= 0.75:
+                    return 'MCI'
+                else:
+                    return 'AD'
+            df['diagnosis'] = df['risk_dementia'].apply(risk_to_diagnosis)
+            print(f"✅ diagnosis dérivé de risk_dementia : {dict(df['diagnosis'].value_counts())}")
         
         # Filtrer les NaN
         required_cols = ['age', 'sex', 'diagnosis']
         available_required = [col for col in required_cols if col in df.columns]
-        
+
         df_before = len(df)
         df = df.dropna(subset=available_required).copy()
+
+        # MODIFIE : exclure OTHER_DEM de la cohorte (groupe heterogene non utilise)
+        if 'diagnosis' in df.columns:
+            n_other = (df['diagnosis'] == 'OTHER_DEM').sum()
+            if n_other > 0:
+                df = df[df['diagnosis'] != 'OTHER_DEM'].copy()
+                print(f"⚠️ {n_other} patients OTHER_DEM exclus de la cohorte")
         df_after = len(df)
         
         print(f"📊 Dataset avant filtrage : {df_before} patients")
@@ -477,10 +548,60 @@ def predict_api(request):
         
         # Prédiction NCA
         nca_result = predict_nca(input_data)
-        
+
         predicted_delta_nca = nca_result['delta_nca']
         patient_age = nca_result['age_chronologique']
         patient_sex = int(input_data.get('sex', 1))
+
+        # MODIFIE : aligner l'interpretation du delta NCA sur les centiles
+        # (relative aux pairs CON+SCD+MCI+AD du meme sexe et meme age)
+        # Au lieu d'utiliser un seuil absolu (ex: delta > 2 = "accelere"),
+        # on utilise la position relative dans la cohorte
+        try:
+            # Fenetre adaptative ±3, ±5, ±8 ans
+            cohort_window = None
+            for half_width in [3, 5, 8]:
+                window_df = df[
+                    (df['sex'] == patient_sex)
+                    & (df['age'] >= patient_age - half_width)
+                    & (df['age'] <= patient_age + half_width)
+                    & df['neurocog_age_flu_weight'].notna()
+                ]
+                if len(window_df) >= 5:
+                    cohort_window = window_df
+                    break
+
+            if cohort_window is not None:
+                nca_values = sorted(cohort_window['neurocog_age_flu_weight'].tolist())
+                patient_nca = nca_result['nca_predicted']
+
+                # Calcul du centile : recherche binaire alignee avec les courbes
+                if patient_nca <= nca_values[0]:
+                    patient_centile_pct = 1
+                elif patient_nca >= nca_values[-1]:
+                    patient_centile_pct = 99
+                else:
+                    n = len(nca_values)
+                    below = sum(1 for v in nca_values if v < patient_nca)
+                    patient_centile_pct = max(1, min(99, round((below / n) * 100)))
+
+                # Interpretation basee sur le centile (cohérente avec l'onglet Centiles)
+                if patient_centile_pct < 10:
+                    new_interp = "Vieillissement cognitif exceptionnellement ralenti"
+                elif patient_centile_pct < 25:
+                    new_interp = "Vieillissement cognitif ralenti (meilleur que la moyenne)"
+                elif patient_centile_pct < 75:
+                    new_interp = "Vieillissement cognitif typique (dans la norme)"
+                elif patient_centile_pct < 90:
+                    new_interp = "Vieillissement cognitif legerement accelere"
+                else:
+                    new_interp = "Vieillissement cognitif accelere"
+
+                nca_result['interpretation'] = new_interp
+                nca_result['patient_centile'] = patient_centile_pct
+                print(f"📊 Centile patient : {patient_centile_pct}e -> {new_interp}")
+        except Exception as e:
+            print(f"⚠️ Calcul centile interpretation echoue : {e}")
         
         # Zones diagnostiques
         zones_male = calculate_diagnostic_zones_CORRECT(df, sex_value=1)
@@ -515,14 +636,42 @@ def predict_api(request):
                 'lms_parameters': {'L': 0, 'M': predicted_delta_nca, 'S': 1}
             }
         
-        # Zone patient
+        # ── Zone patient (diagnostic) ────────────────────────────────────
+        # MODIFIE : remplacement des seuils hardcodes par le classifieur LGBM
+        #
+        # AVANT (seuils) :
+        #   if delta < limit_normal_mci  -> "Normale"
+        #   elif delta < limit_mci_ad    -> "MCI"
+        #   else                         -> "Pathologique"
+        #   Probleme : n'utilise qu'un seul chiffre (delta), accuracy 56.6%
+        #
+        # APRES (classifieur LGBM) :
+        #   Etape 1 : on prepare les 30 features du patient + le delta predit
+        #   Etape 2 : le classifieur LGBM predit CON/SCD/MCI/AD
+        #   Etape 3 : on convertit en zone (CON/SCD -> Normale, MCI -> MCI, AD -> Pathologique)
+        #   Avantage : utilise 31 variables (moca, comorbidites, etc.), accuracy 69.4%
+        #
+        # Si le classifieur n'est pas disponible, on retombe sur les seuils (fallback)
         limits = zones_male['limits'] if patient_sex == 1 else zones_female['limits']
-        if predicted_delta_nca < limits['normal_mci']:
-            patient_zone = 'Normale'
-        elif predicted_delta_nca < limits['mci_ad']:
-            patient_zone = 'MCI'
+        diag_classifier = load_diag_classifier()
+        if diag_classifier is not None:
+            # Pipeline : 30 features NCA + delta_pred -> classifieur -> diagnostic
+            clf_features = prepare_nca_features(input_data)
+            clf_input = pd.DataFrame([clf_features], columns=FEATURES_ALL_PLUS_PLUS)
+            clf_input['delta_pred'] = predicted_delta_nca  # ajouter le delta du Modele 1
+            predicted_diag = diag_classifier.predict(clf_input)[0]
+            # Conversion diagnostic -> zone d'affichage pour le frontend
+            diag_to_zone = {'CON': 'Normale', 'SCD': 'Normale', 'MCI': 'MCI', 'AD': 'Pathologique'}
+            patient_zone = diag_to_zone.get(predicted_diag, 'MCI')
+            print(f"🔮 Classifieur diagnostic : {predicted_diag} -> zone {patient_zone}")
         else:
-            patient_zone = 'Pathologique'
+            # Fallback : seuils hardcodes (utilise seulement si le classifieur est absent)
+            if predicted_delta_nca < limits['normal_mci']:
+                patient_zone = 'Normale'
+            elif predicted_delta_nca < limits['mci_ad']:
+                patient_zone = 'MCI'
+            else:
+                patient_zone = 'Pathologique'
         
         # Cohorte de référence
         reference_cohort = []
@@ -629,7 +778,7 @@ def predict_api(request):
                 'n_samples_total': len(df),
                 'n_con': len(df_con),
                 'nca_model': 'LGBM_with_nan',
-                'data_file': 'Example_database_withoutrois.xlsx'
+                'data_file': 'Example_database_withoutrois1.xlsx'
             },
             'risk_scores': {
                 'risk_dementia': clean_numeric_value(risk_scores['risk_dementia']),

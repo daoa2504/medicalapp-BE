@@ -56,8 +56,8 @@ def predict_with_model_1(data):
         'fluency_score': data['fluency_score']
     }
 
-    # ✅ Charger les modèles (lazy loading)
-    model1 = load_model(MODEL_DIR / 'Linear_reg_basic.sav')
+    # MODIFIE : chemin reorganise dans models/nca_regression/
+    model1 = load_model(MODEL_DIR / 'nca_regression' / 'Linear_reg_basic.sav')
     prediction = model1.predict([list(necessary_fields.values())])
 
     # Calculer les métriques
@@ -105,8 +105,8 @@ def predict_with_model_2(data):
         'logic_delay': data['logic_delay']
     }
 
-    # ✅ Charger les modèles
-    model1 = load_model(MODEL_DIR / 'Linear_reg_all.sav')
+    # MODIFIE : chemin reorganise dans models/nca_regression/
+    model1 = load_model(MODEL_DIR / 'nca_regression' / 'Linear_reg_all.sav')
     prediction = model1.predict([list(all_fields.values())])
 
     # Calculer les métriques
@@ -172,8 +172,8 @@ def predict_with_model_3(data):
         'sleep_deprivation': data['sleep_deprivation']
     }
 
-    # ✅ Charger les modèles
-    model1 = load_model(MODEL_DIR / 'Linear_reg_all_plus_plus.sav')
+    # MODIFIE : chemin reorganise dans models/nca_regression/
+    model1 = load_model(MODEL_DIR / 'nca_regression' / 'Linear_reg_all_plus_plus.sav')
     prediction = model1.predict([list(all_fields_plus_plus.values())])
 
     # Calculer les métriques

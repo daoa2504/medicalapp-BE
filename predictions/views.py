@@ -18,7 +18,8 @@ import plotly.io as pio
 # ========== CONFIGURATION DES CHEMINS ==========
 
 BASE_DIR = Path(__file__).resolve().parent
-DATA_PATH = BASE_DIR / "data" / "Example_database_withoutrois.xlsx"
+# MODIFIE : utilisation des donnees reelles
+DATA_PATH = BASE_DIR / "data" / "Example_database_withoutrois1.xlsx"
 
 print(f"📂 views.py - DATA_PATH: {DATA_PATH}")
 
